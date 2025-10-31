@@ -1,0 +1,32 @@
+[project]
+name = "p4-stack"
+version = "0.1.0"
+description = "A CLI for stacked diffs in Perforce, bringing a Git-like workflow to P4."
+authors = [
+    {name = "Khoa Ngo",email = "ngominhkhoa2006@gmail.com"}
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "typer (>=0.20.0,<0.21.0)",
+    "p4python (>=2025.1.2767466,<2026.0.0)"
+]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.4.2"
+pytest-mock = "^3.15.1"
+
+[tool.pytest.ini_options]
+markers = [
+    "unit: marks tests as unit tests",
+    "integration: marks tests as integration tests",
+]
+
+[tool.poetry.scripts]
+# This defines the `p4-stack` command-line entry point
+p4-stack = "p4_stack.main:app"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,125 @@
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+/build/
+/dist/
+/*.egg-info/
+/*.egg
+pip-wheel-metadata/
+share/python-wheels/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+htmlcov/
+coverage.xml
+nose2-junit.xml
+reports/
+
+# Translations
+*.mo
+*.pot
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# Poetry virtualenvs created in project
+.venv/
+
+# pyenv
+.python-version
+
+# mypy
+.mypy_cache/
+
+# Pyre
+.pyre/
+
+# Pyright
+.pyrightcache/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Editor temporary files
+*~
+# swap files
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Local environment variables
+.env
+.env.*
+local_settings.py
+settings_local.py
+
+# Sphinx documentation
+docs/_build/
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Byte-compiled / optimized / DLL files
+__pypackages__/
+*.pyc
+*.pyd
+
+# SQLite dbs
+*.db
+*.sqlite3
+
+# Coverage and profiling
+.coverage
+coverage.xml
+*.cover
+*.prof
+
+# Rust/Cargo build artifacts (if any extension modules)
+/target/
+
+# Node modules (occasionally present in repos with frontend parts)
+node_modules/
+
+# Logs
+*.log
+logs/
+
+# Generated files
+._*
+
+# End of file

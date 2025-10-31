@@ -1,0 +1,12 @@
+# .p4ignore
+
+# Ignore p4-stack state file for the 'update' command
+
+.p4-stack-state.json
+
+# Python cache and artifacts
+
+pycache/
+*.pyc
+.pytest_cache/
+.venv/
