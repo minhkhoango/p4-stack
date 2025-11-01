@@ -7,7 +7,6 @@ import os
 import re
 
 # --- Type Aliases for P4 Library ---
-# The P4 library returns mixed types, so we define these for clarity
 P4Result = Union[Dict[str, Any], str]  # p4.run() returns list of these
 P4ChangeSpec = Dict[str, Any]  # Changelist specification dict
 P4CommandOutput = List[P4Result]  # Standard P4 command output
