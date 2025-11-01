@@ -4,7 +4,6 @@ from .commands.list import list_stack
 from .commands.update import update_stack
 from .commands.create import create_stack
 from .commands.submit import submit_stack
-from .commands.review import review_stack
 from rich.console import Console
 
 # Set up the main Typer application
@@ -21,7 +20,6 @@ app.command("list")(list_stack)
 app.command("update")(update_stack)
 app.command("create")(create_stack)
 app.command("submit")(submit_stack)
-app.command("review")(review_stack)
 
 @app.callback()
 def main_callback() -> None:
