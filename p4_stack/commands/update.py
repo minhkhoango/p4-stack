@@ -15,7 +15,7 @@ console = Console(stderr=True)
 
 # --- Helper Functions ---
 
-def _find_node_in_graph(
+def find_node_in_graph(
     cl_num: str, roots: List[StackedChange]
 ) -> Optional[StackedChange]:
     """Finds a specific CL node in the graph by number."""
@@ -27,7 +27,7 @@ def _find_node_in_graph(
         stack.extend(node.children)
     return None
 
-def _get_stack_from_node(base_node: StackedChange) -> List[StackedChange]:
+def get_stack_from_node(base_node: StackedChange) -> List[StackedChange]:
     """Returns a flat list of all nodes in the subtree, starting from base_node."""
     stack_nodes: List[StackedChange] = []
     stack_to_visit = [base_node]
@@ -167,7 +167,7 @@ def _handle_new_update(p4: P4Connection, cl_num: str) -> None:
     
     raw_changes = p4.get_pending_changelists()
     roots = build_stack_graph(raw_changes)
-    base_node = _find_node_in_graph(cl_num, roots)
+    base_node = find_node_in_graph(cl_num, roots)
     
     if not base_node:
         console.print(
@@ -175,7 +175,7 @@ def _handle_new_update(p4: P4Connection, cl_num: str) -> None:
         )
         raise typer.Exit(code=1)
         
-    stack_nodes = _get_stack_from_node(base_node)
+    stack_nodes = get_stack_from_node(base_node)
     stack_cl_nums = [node.cl_num for node in stack_nodes]
     
     state = UpdateState(
@@ -254,8 +254,11 @@ def _run_update_loop(
                 f"Rebasing child [bold]{cl_to_rebase}[/bold] "
                 f"onto [bold]{parent_cl}[/bold]..."
             )
-            p4.unshelve(cl_to_rebase, cl_to_rebase)
+            # First unshelve the parent (base), then child (theirs)
+            # This way we have parent's changes as the base
             p4.unshelve(parent_cl, cl_to_rebase)
+            # Force-unshelve child to create the conflicts
+            p4.unshelve(cl_to_rebase, cl_to_rebase, force=True)
 
             try:
                 p4.resolve_auto_merge()

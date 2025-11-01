@@ -2,7 +2,7 @@
 import typer
 from ..p4_actions import P4Connection, P4Exception, P4OperationError, P4LoginRequiredError
 from ..graph_utils import build_stack_graph
-from .update import _find_node_in_graph, _get_stack_from_node
+from .update import find_node_in_graph, get_stack_from_node
 from rich.console import Console
 
 console = Console(stderr=True)
@@ -23,14 +23,14 @@ def review_stack(
             console.print(f"Finding stack from base [bold]{cl_num}[/bold]...")
             raw_changes = p4.get_pending_changelists()
             roots = build_stack_graph(raw_changes)
-            base_node = _find_node_in_graph(cl_num, roots)
+            base_node = find_node_in_graph(cl_num, roots)
             
             if not base_node:
                 raise P4OperationError(
                     f"Changelist {cl_num} not found in pending stacks."
                 )
             
-            stack_nodes = _get_stack_from_node(base_node)
+            stack_nodes = get_stack_from_node(base_node)
             p4.revert_all()
 
             temp_cl_desc = (

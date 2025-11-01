@@ -1,8 +1,16 @@
 # p4_stack/p4_actions.py
-from P4 import P4, P4Exception as P4LibException
-from typing import List, Dict, Any, Optional
+from __future__ import annotations
+
+from P4 import P4, P4Exception as P4LibException  # type: ignore[import-not-found]
+from typing import List, Dict, Any, Optional, Union
 import os
 import re
+
+# --- Type Aliases for P4 Library ---
+# The P4 library returns mixed types, so we define these for clarity
+P4Result = Union[Dict[str, Any], str]  # p4.run() returns list of these
+P4ChangeSpec = Dict[str, Any]  # Changelist specification dict
+P4CommandOutput = List[P4Result]  # Standard P4 command output
 
 # --- Custom Domain-Specific Exceptions ---
 
@@ -51,13 +59,14 @@ class P4Connection:
         self.p4: P4 = P4()
         self.user: Optional[str] = None
 
-    def __enter__(self) -> 'P4Connection':
+    def __enter__(self) -> P4Connection:
         """Establishes P4 connection as a context manager."""
         try:
-            self.p4.connect()
-            self.user = self.p4.user or os.getenv("P4USER")
+            self.p4.connect()  # type: ignore[attr-defined]
+            user_from_p4: Optional[str] = self.p4.user  # type: ignore[attr-defined]
+            self.user = user_from_p4 or os.getenv("P4USER")
             
-            if not self.user:
+            if not self.user:  # type: ignore[misc]
                 raise P4ConnectionError(
                     "Could not determine P4 user. "
                     "Ensure $P4USER is set or P4CONFIG is configured."
@@ -70,19 +79,20 @@ class P4Connection:
     
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
         """Ensures P4 connection is disconnected."""
-        if self.p4.connected():
-            self.p4.disconnect()
+        if self.p4.connected():  # type: ignore[attr-defined]
+            self.p4.disconnect()  # type: ignore[attr-defined]
             
     def get_pending_changelists(self) -> List[Dict[str, Any]]:
         """Fetches all pending changelists for the connected user."""
-        if not self.user or not self.p4.connected():
+        if not self.user or not self.p4.connected():  # type: ignore[attr-defined]
             raise P4ConnectionError("User not set or P4 not connected.")
             
         try:
-            changes: List[Dict[str, Any]] = self.p4.run(
+            result: P4CommandOutput = self.p4.run(  # type: ignore[attr-defined]
                 'changes', '-s', 'pending', '-u', self.user, '-l'
             )
-            return changes
+            # Filter to ensure we only return dictionaries
+            return [item for item in result if isinstance(item, dict)]  # type: ignore[return-value]
         except P4LibException as e:
             if _is_login_error(str(e)):
                 raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
@@ -93,17 +103,22 @@ class P4Connection:
     def revert_all(self) -> None:
         """Reverts all files in the client workspace."""
         try:
-            self.p4.run('revert', '//...')
+            self.p4.run('revert', '//...')  # type: ignore[attr-defined]
         except P4LibException as e:
             if _is_login_error(str(e)):
                 raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
-            if "file(s) not open on this client" not in str(e):
+            err_str = str(e)
+            # Handle both variations of the "no files open" message
+            if "file(s) not open" not in err_str and "not opened" not in err_str:
                 raise P4OperationError(f"Error reverting workspace: {e}")
 
-    def unshelve(self, source_cl: str, target_cl: str) -> None:
+    def unshelve(self, source_cl: str, target_cl: str, force: bool = False) -> None:
         """Unshelves files from source_cl into target_cl."""
         try:
-            self.p4.run('unshelve', '-s', source_cl, '-c', target_cl)
+            if force:
+                self.p4.run('unshelve', '-f', '-s', source_cl, '-c', target_cl)  # type: ignore[attr-defined]
+            else:
+                self.p4.run('unshelve', '-s', source_cl, '-c', target_cl)  # type: ignore[attr-defined]
         except P4LibException as e:
             if _is_login_error(str(e)):
                 raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
@@ -114,7 +129,7 @@ class P4Connection:
     def force_shelve(self, cl_num: str) -> None:
         """Force-shelves all open files into the specified changelist."""
         try:
-            self.p4.run('shelve', '-f', '-c', cl_num)
+            self.p4.run('shelve', '-f', '-c', cl_num)  # type: ignore[attr-defined]
         except P4LibException as e:
             if _is_login_error(str(e)):
                 raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
@@ -123,8 +138,8 @@ class P4Connection:
     def get_opened_files(self, cl_num: str) -> List[Dict[str, Any]]:
         """Gets a list of opened files (as dicts) in a changelist."""
         try:
-            opened_files = self.p4.run('opened', '-c', cl_num)
-            return opened_files # type: ignore
+            result: P4CommandOutput = self.p4.run('opened', '-c', cl_num)  # type: ignore[attr-defined]
+            return [item for item in result if isinstance(item, dict)]  # type: ignore[return-value]
         except P4LibException as e:
             if _is_login_error(str(e)):
                 raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
@@ -133,13 +148,23 @@ class P4Connection:
     def resolve_auto_merge(self) -> None:
         """Attempts an automatic merge ('p4 resolve -am')."""
         try:
-            results = self.p4.run('resolve', '-am')
+            # First check if there are files to resolve
+            resolve_list: P4CommandOutput = self.p4.run('resolve', '-n')  # type: ignore[attr-defined]
+            if not resolve_list:
+                # No files need resolving
+                return
+                
+            # Try automatic merge
+            results: P4CommandOutput = self.p4.run('resolve', '-am')  # type: ignore[attr-defined]
             has_conflict = False
-            for msg in results:
-                if isinstance(msg, dict) and "resolve" in msg.get("action", ""):
-                    has_conflict = True
-                    break
-                if isinstance(msg, str) and "must resolve" in msg:
+            for msg in results:  # type: ignore[misc]
+                if isinstance(msg, dict):
+                    action: str = msg.get("action", "")  # type: ignore[misc]
+                    # Check if resolve failed or needs manual intervention
+                    if "resolve" in action or action == "":
+                        has_conflict = True
+                        break
+                elif isinstance(msg, str) and "must resolve" in msg:
                     has_conflict = True
                     break
             if has_conflict:
@@ -149,12 +174,15 @@ class P4Connection:
         except P4LibException as e:
             if _is_login_error(str(e)):
                 raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
-            if "must resolve" in str(e):
+            err_str = str(e)
+            if "must resolve" in err_str or "resolve skipped" in err_str:
                 raise P4ConflictException(
                     f"Automatic merge failed: {e}. Manual resolution required."
                 )
-            else:
-                raise P4OperationError(f"Error during resolve: {e}")
+            # "No file(s) to resolve" is not an error
+            if "no file(s) to resolve" in err_str.lower():
+                return
+            raise P4OperationError(f"Error during resolve: {e}")
 
     # --- Week 3: Workflow Operations ---
 
@@ -165,11 +193,12 @@ class P4Connection:
     def create_new_changelist(self, description: str) -> str:
         """Creates a new empty pending CL and returns its number."""
         try:
-            change_spec = self.p4.fetch_change()
+            change_spec: P4ChangeSpec = self.p4.fetch_change()  # type: ignore[attr-defined]
             change_spec['Description'] = description
-            result = self.p4.save_change(change_spec)
+            result: P4CommandOutput = self.p4.save_change(change_spec)  # type: ignore[attr-defined]
             
-            match = re.search(r"Change (\d+) created", str(result))
+            result_str = " ".join(str(item) for item in result)  # type: ignore[misc]
+            match = re.search(r"Change (\d+) created", result_str)
             if not match:
                 raise P4OperationError(f"Could not parse new CL number from: {result}")
             return match.group(1)
@@ -181,7 +210,7 @@ class P4Connection:
     def reopen_files(self, target_cl: str, files: List[str]) -> None:
         """Moves a list of depot paths to a target changelist."""
         try:
-            self.p4.run('reopen', '-c', target_cl, *files)
+            self.p4.run('reopen', '-c', target_cl, *files)  # type: ignore[attr-defined]
         except P4LibException as e:
             if _is_login_error(str(e)):
                 raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
@@ -199,7 +228,7 @@ class P4Connection:
     def update_changelist(self, cl_spec: Dict[str, Any]) -> None:
         """Saves an updated changelist spec (e.g., to change description)."""
         try:
-            self.p4.save_change(cl_spec)
+            self.p4.save_change(cl_spec)  # type: ignore[attr-defined]
         except P4LibException as e:
             if _is_login_error(str(e)):
                 raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
@@ -210,14 +239,16 @@ class P4Connection:
         Submits a changelist and returns the new, permanent CL number.
         """
         try:
-            result = self.p4.run('submit', '-c', cl_num)
+            result: P4CommandOutput = self.p4.run('submit', '-c', cl_num)  # type: ignore[attr-defined]
             
-            submitted_cl = None
-            for line in result:
-                if isinstance(line, dict) and 'submittedChange' in line:
-                    submitted_cl = line['submittedChange']
-                    break
-                if isinstance(line, str):
+            submitted_cl: Optional[str] = None
+            for line in result:  # type: ignore[misc]
+                if isinstance(line, dict):
+                    submitted_cl_value: Any = line.get('submittedChange')  # type: ignore[misc]
+                    if submitted_cl_value:
+                        submitted_cl = str(submitted_cl_value)  # type: ignore[arg-type]
+                        break
+                elif isinstance(line, str):
                     match = re.search(r"Change (\d+) submitted", line)
                     if match:
                         submitted_cl = match.group(1)
@@ -234,7 +265,7 @@ class P4Connection:
     def delete_changelist(self, cl_num: str) -> None:
         """Deletes a pending changelist."""
         try:
-            self.p4.run('change', '-d', cl_num)
+            self.p4.run('change', '-d', cl_num)  # type: ignore[attr-defined]
         except P4LibException as e:
             if _is_login_error(str(e)):
                 raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
@@ -243,7 +274,7 @@ class P4Connection:
     def create_review(self, cl_num: str) -> None:
         """Creates a Swarm review for a changelist."""
         try:
-            self.p4.run('review', '-c', cl_num)
+            self.p4.run('review', '-c', cl_num)  # type: ignore[attr-defined]
         except P4LibException as e:
             if _is_login_error(str(e)):
                 raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")

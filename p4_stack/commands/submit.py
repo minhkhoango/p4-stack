@@ -2,7 +2,7 @@
 import typer
 from ..p4_actions import P4Connection, P4Exception, P4OperationError, P4LoginRequiredError
 from ..graph_utils import build_stack_graph, set_depends_on
-from .update import _find_node_in_graph, _get_stack_from_node
+from .update import find_node_in_graph, get_stack_from_node
 from typing import Dict
 from rich.console import Console
 
@@ -23,14 +23,14 @@ def submit_stack(
             console.print(f"Finding stack from base [bold]{cl_num}[/bold]...")
             raw_changes = p4.get_pending_changelists()
             roots = build_stack_graph(raw_changes)
-            base_node = _find_node_in_graph(cl_num, roots)
+            base_node = find_node_in_graph(cl_num, roots)
             
             if not base_node:
                 raise P4OperationError(
                     f"Changelist {cl_num} not found in pending stacks."
                 )
             
-            stack_nodes = _get_stack_from_node(base_node)
+            stack_nodes = get_stack_from_node(base_node)
             submitted_cl_map: Dict[str, str] = {}
             
             console.print(f"Found stack with {len(stack_nodes)} changes. Starting submit...")
@@ -48,8 +48,18 @@ def submit_stack(
                     
                     cl_spec = p4.get_changelist(current_cl_num)
                     new_desc = set_depends_on(node.description, new_parent_cl)
-                    cl_spec['_Description'] = new_desc
+                    cl_spec['Description'] = new_desc
                     p4.update_changelist(cl_spec)
+                
+                # Unshelve the files before submitting
+                console.print(f"  Unshelving files in [bold]{current_cl_num}[/bold]...")
+                p4.unshelve(current_cl_num, current_cl_num, force=True)
+                
+                # Delete the shelved files so we can submit
+                try:
+                    p4.p4.run('shelve', '-d', '-c', current_cl_num)
+                except P4Exception:
+                    pass  # Ignore if shelved files were already deleted
                 
                 console.print(f"Submitting [bold]{current_cl_num}[/bold]...")
                 new_submitted_cl = p4.submit_changelist(current_cl_num)
@@ -57,6 +67,12 @@ def submit_stack(
                     f"  -> Submitted as [bold green]CL {new_submitted_cl}[/bold green]"
                 )
                 submitted_cl_map[current_cl_num] = new_submitted_cl
+                
+                # Revert any remaining files in the workspace
+                try:
+                    p4.revert_all()
+                except P4Exception:
+                    pass  # Ignore if no files to revert
                 
             console.print("\n[bold green]Stack submitted successfully.[/bold green]")
             
@@ -66,7 +82,15 @@ def submit_stack(
             ):
                 console.print("Cleaning up pending changelists...")
                 for cl in pending_cls:
-                    p4.delete_changelist(cl)
+                    try:
+                        # Delete shelved files first if they exist
+                        try:
+                            p4.p4.run('shelve', '-d', '-c', cl)
+                        except P4Exception:
+                            pass  # Ignore if no shelved files
+                        p4.delete_changelist(cl)
+                    except P4Exception as e:
+                        console.print(f"  [yellow]Warning: Could not delete CL {cl}: {e}[/yellow]")
                 console.print("Cleanup complete.")
 
     except P4LoginRequiredError as e:
