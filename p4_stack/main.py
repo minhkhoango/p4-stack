@@ -1,10 +1,9 @@
 # p4_stack/main.py
 import typer
-from .commands.list import list_stack
 from .commands.update import update_stack
-from .commands.create import create_stack
 from .commands.submit import submit_stack
 from rich.console import Console
+
 
 # Set up the main Typer application
 app = typer.Typer(
@@ -16,9 +15,7 @@ app = typer.Typer(
 console = Console(stderr=True)
 
 # Register the commands
-app.command("list")(list_stack)
 app.command("update")(update_stack)
-app.command("create")(create_stack)
 app.command("submit")(submit_stack)
 
 @app.callback()

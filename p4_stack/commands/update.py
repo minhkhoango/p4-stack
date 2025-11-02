@@ -1,92 +1,21 @@
 # p4_stack/commands/update.py
 import typer
-import os
-import subprocess
 from typing import List, Dict, Optional
 from ..p4_actions import (
-    P4Connection, P4Exception, P4OperationError, 
-    P4ConflictException, P4LoginRequiredError, P4LibException
+    P4Connection, P4Exception,
+    P4ConflictException, P4LoginRequiredError
 )
-from ..graph_utils import build_stack_graph, StackedChange
-from ..state import UpdateState, save_state, load_state, clear_state, STATE_FILE
 from rich.console import Console
+import json
+import os
+
 
 console = Console(stderr=True)
 
-# --- Helper Functions ---
-
-def find_node_in_graph(
-    cl_num: str, roots: List[StackedChange]
-) -> Optional[StackedChange]:
-    """Finds a specific CL node in the graph by number."""
-    stack = list(roots)
-    while stack:
-        node = stack.pop()
-        if node.cl_num == cl_num:
-            return node
-        stack.extend(node.children)
-    return None
-
-def get_stack_from_node(base_node: StackedChange) -> List[StackedChange]:
-    """Returns a flat list of all nodes in the subtree, starting from base_node."""
-    stack_nodes: List[StackedChange] = []
-    stack_to_visit = [base_node]
-    while stack_to_visit:
-        node = stack_to_visit.pop(0) # BFS to maintain order
-        stack_nodes.append(node)
-        # Add children in sorted order
-        stack_to_visit.extend(sorted(node.children, key=lambda c: int(c.cl_num)))
-    return stack_nodes
-
-def _get_all_nodes_map(
-    roots: List[StackedChange]
-) -> Dict[str, StackedChange]:
-    """Returns a flat map of {cl_num: StackedChange} for all nodes."""
-    all_nodes: Dict[str, StackedChange] = {}
-    stack = list(roots)
-    while stack:
-        node = stack.pop()
-        all_nodes[node.cl_num] = node
-        stack.extend(node.children)
-    return all_nodes
-
-def _launch_editor(p4: P4Connection, cl_num: str) -> None:
-    """
-    Launches the user's $EDITOR for the files in the base CL.
-    Per the plan: Respects $EDITOR env var.
-    """
-    console.print(f"  Launching editor for changelist [bold]{cl_num}[/bold]...")
-    
-    editor = os.getenv("EDITOR")
-    if not editor:
-        editor = "vi" # Fallback as per the plan
-        
-    try:
-        opened_list = p4.get_opened_files(cl_num)
-        local_paths = [f['clientFile'] for f in opened_list if 'clientFile' in f]
-
-        if not local_paths:
-            console.print(
-                f"[yellow]Warning:[/yellow] No files found open in {cl_num} to edit."
-            )
-            return
-
-        try:
-            subprocess.run([editor, *local_paths], check=True)
-        except FileNotFoundError:
-            raise P4OperationError(f"Editor '{editor}' not found. Check $EDITOR.")
-        except subprocess.CalledProcessError as e:
-            raise P4OperationError(f"Editor exited with error: {e}")
-            
-    except P4LibException as e: # This is from p4.get_opened_files
-        raise P4OperationError(f"Failed to get files for editor: {e}")
-
-# --- Main Command Logic ---
-
 def update_stack(
-    cl_num: str = typer.Argument(
-        None,
-        help="The base changelist number of the stack to update."
+    stack: List[str] = typer.Argument(
+        ...,
+        help="The stack of changelists to update, from base to tip.",
     ),
     continue_op: bool = typer.Option(
         False,
@@ -95,184 +24,162 @@ def update_stack(
     ),
 ) -> None:
     """
-    Updates a changelist and propagates the changes up its stack.
+    Updates a stack of changelists by rebasing them in order.
     
-    This is the "Rebase Engine."
+    Assumes the base CL (the first in the list) is the *source of the fix*
+    and propagates its changes up the stack.
     """
     
-    if not cl_num and not continue_op:
-        console.print("[red]Error:[/red] Must specify a changelist number or --continue.")
+    if not stack and not continue_op:
+        console.print("[red]Error:[/red] Must specify a stack of CLs or --continue.")
         raise typer.Exit(code=1)
 
     is_conflict_exit = False
-    is_login_exit = False
     
     try:
         with P4Connection() as p4:
             if continue_op:
+                # The --continue operation re-runs the *last attempted rebase*.
                 _handle_continue_update(p4)
             else:
-                _handle_new_update(p4, cl_num)
+                if len(stack) < 2:
+                    console.print(
+                        "[yellow]Warning:[/yellow] A stack of 1 CL was provided. "
+                        "Nothing to update."
+                    )
+                    raise typer.Exit(code=0)
                 
-    except P4LoginRequiredError as e:
-        is_login_exit = True
-        console.print(f"\n[bold yellow]Login required:[/bold yellow] {e}")
-        raise typer.Exit(code=0) # Graceful exit
-
+                # We only rebase the *children*
+                base_cl = stack[0]
+                children_cls = stack[1:]
+                console.print(f"Starting update for stack based at [bold]{base_cl}[/bold]...")
+                _run_update_loop(p4, base_cl, children_cls)
+                
     except P4ConflictException as e:
         is_conflict_exit = True
         console.print(f"\n[bold yellow]CONFLICT:[/bold yellow] {e}")
-        console.print(
-            "Please run [bold]'p4 resolve'[/bold] manually to fix."
-        )
-        console.print(
-            "Once resolved, run [bold]'p4-stack update --continue'[/bold]."
-        )
-        raise typer.Exit(code=0) # Successful exit, awaiting user
+        console.print("Please run [bold]'p4 resolve'[/bold] manually to fix.")
+        console.print("Once resolved, run [bold]'p4-stack update --continue'[/bold].")
+        # We don't exit with code 1, it's a planned stop.
+
+    except P4LoginRequiredError as e:
+        console.print(f"\n[bold yellow]Login required:[/bold yellow] {e}")
+        raise typer.Exit(code=0)
         
     except P4Exception as e:
         console.print(f"\n[bold red]Perforce Error:[/bold red] {e}")
-        # On error, guarantee workspace is clean
-        with P4Connection() as p4_cleanup:
-            p4_cleanup.revert_all()
         raise typer.Exit(code=1)
         
     except Exception as e:
         console.print(f"\n[bold red]Unexpected Error:[/bold red] {e}")
-        # On *any* crash, guarantee workspace is clean
         console.print("Reverting workspace due to error...")
         with P4Connection() as p4_cleanup:
             p4_cleanup.revert_all()
         raise typer.Exit(code=1)
     
     finally:
-        # Per the plan: *always* revert on a successful,
-        # non-conflict exit. Skip if session expired.
-        if not is_conflict_exit and not is_login_exit:
+        # *Always* revert on a successful or error exit.
+        # Skip only on a *conflict* exit, to let the user resolve.
+        if not is_conflict_exit:
+            console.print("Cleaning up workspace...")
             with P4Connection() as p4_cleanup:
                 p4_cleanup.revert_all()
 
+# --- We need a minimal state file just for --continue ---
+STATE_FILE = ".p4-stack-state.json"
 
-def _handle_new_update(p4: P4Connection, cl_num: str) -> None:
-    """Starts a fresh p4-stack update operation."""
+def _save_conflict_state(parent_cl: str, conflict_cl: str) -> None:
+    """Saves *only* the CLs involved in the conflict."""
+    state = {"parent_cl": parent_cl, "conflict_cl": conflict_cl}
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f)
+    except IOError as e:
+        console.print(f"Error: Could not write state file {STATE_FILE}: {e}")
+
+def _load_conflict_state() -> Optional[Dict[str, str]]:
+    if not os.path.exists(STATE_FILE):
+        return None
+    try:
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
+    except (IOError, json.JSONDecodeError):
+        return None
+
+def _clear_state() -> None:
     if os.path.exists(STATE_FILE):
-        console.print(
-            f"[red]Error:[/red] State file '{STATE_FILE}' already exists."
-        )
-        console.print("An 'update' operation is already in progress.")
-        console.print("Run 'p4-stack update --continue' or delete the file.")
-        raise typer.Exit(code=1)
+        os.remove(STATE_FILE)
 
-    console.print(f"Starting update for stack based at [bold]{cl_num}[/bold]...")
-    
-    raw_changes = p4.get_pending_changelists()
-    roots = build_stack_graph(raw_changes)
-    base_node = find_node_in_graph(cl_num, roots)
-    
-    if not base_node:
-        console.print(
-            f"[red]Error:[/red] Changelist {cl_num} not found in pending stacks."
-        )
-        raise typer.Exit(code=1)
-        
-    stack_nodes = get_stack_from_node(base_node)
-    stack_cl_nums = [node.cl_num for node in stack_nodes]
-    
-    state = UpdateState(
-        base_cl=cl_num,
-        stack_to_update=stack_cl_nums,
-        rebased_cls=[]
-    )
-    save_state(state)
-    
-    all_nodes_map = _get_all_nodes_map(roots)
-    _run_update_loop(p4, state, all_nodes_map)
+# --- End State Helpers ---
 
 def _handle_continue_update(p4: P4Connection) -> None:
     """Resumes an update operation from the state file."""
-    state = load_state()
+    state = _load_conflict_state()
     if not state:
         console.print("[red]Error:[/red] No state file found. Cannot --continue.")
         raise typer.Exit(code=1)
         
-    console.print(f"Continuing update for stack [bold]{state.base_cl}[/bold]...")
+    conflict_cl = state["conflict_cl"]
+    parent_cl = state["parent_cl"]
+    
+    console.print(
+        f"Continuing update for [bold]{conflict_cl}[/bold] onto [bold]{parent_cl}[/bold]..."
+    )
+    
+    # User has resolved. We just need to shelve.
+    console.print(f"  Shelving resolved changelist [bold]{conflict_cl}[/bold]...")
+    p4.force_shelve(conflict_cl)
+    
+    _clear_state()
+    console.print(
+        "\n[bold green]Continue operation complete.[/bold green]\n"
+        "Please re-run your original 'p4-stack update ...' command, \n"
+        f"starting from the *next* CL: [bold]{conflict_cl}[/bold]"
+    )
+    console.print(
+        f"Example: p4-stack update {conflict_cl} [child_of_conflict_cl] ..."
+    )
 
-    raw_changes = p4.get_pending_changelists()
-    roots = build_stack_graph(raw_changes)
-    all_nodes_map = _get_all_nodes_map(roots)
-    
-    if state.conflict_cl:
-        cl_to_shelve = state.conflict_cl
-        console.print(
-            f"  Shelving resolved changelist [bold]{cl_to_shelve}[/bold]..."
-        )
-        p4.force_shelve(cl_to_shelve)
-        
-        state.rebased_cls.append(cl_to_shelve)
-        state.conflict_cl = None
-        save_state(state)
-    
-    _run_update_loop(p4, state, all_nodes_map)
 
 def _run_update_loop(
     p4: P4Connection,
-    state: UpdateState,
-    all_nodes_map: Dict[str, StackedChange]
+    base_cl: str,
+    children_cls: List[str]
 ) -> None:
     """
     The main rebase engine loop.
-    Iterates through CLs, applying the update or rebase logic.
     """
     
-    stack_to_process = [
-        cl for cl in state.stack_to_update 
-        if cl not in state.rebased_cls
-    ]
-
-    for cl_to_rebase in stack_to_process:
-        node = all_nodes_map.get(cl_to_rebase)
-        if not node:
-            raise P4OperationError(f"Internal Error: CL {cl_to_rebase} not in graph.")
-        
+    current_parent = base_cl
+    
+    for cl_to_rebase in children_cls:
         p4.revert_all()
         
-        if cl_to_rebase == state.base_cl:
-            console.print(
-                f"Updating base changelist [bold]{cl_to_rebase}[/bold]..."
-            )
-            p4.unshelve(cl_to_rebase, cl_to_rebase)
-            _launch_editor(p4, cl_to_rebase)
-            console.print(f"  Shelving changes to [bold]{cl_to_rebase}[/bold]...")
-            p4.force_shelve(cl_to_rebase)
+        console.print(
+            f"Rebasing child [bold]{cl_to_rebase}[/bold] "
+            f"onto [bold]{current_parent}[/bold]..."
+        )
         
-        else:
-            parent_cl = node.parent_cl
-            if not parent_cl:
-                raise P4OperationError(f"Internal Error: CL {cl_to_rebase} has no parent.")
-            
-            console.print(
-                f"Rebasing child [bold]{cl_to_rebase}[/bold] "
-                f"onto [bold]{parent_cl}[/bold]..."
-            )
-            # First unshelve the parent (base), then child (theirs)
-            # This way we have parent's changes as the base
-            p4.unshelve(parent_cl, cl_to_rebase)
-            # Force-unshelve child to create the conflicts
-            p4.unshelve(cl_to_rebase, cl_to_rebase, force=True)
-
-            try:
-                p4.resolve_auto_merge()
-            except P4ConflictException as e:
-                # Save the conflict state and re-raise
-                state.conflict_cl = cl_to_rebase
-                save_state(state)
-                raise e # Re-raise to be caught by main handler
-
-            console.print(f"  Shelving rebased [bold]{cl_to_rebase}[/bold]...")
-            p4.force_shelve(cl_to_rebase)
+        # 1. Unshelve the *newly fixed* parent (base)
+        p4.unshelve(current_parent, cl_to_rebase)
         
-        state.rebased_cls.append(cl_to_rebase)
-        save_state(state)
+        # 2. Force-unshelve child's original changes on top
+        p4.unshelve(cl_to_rebase, cl_to_rebase, force=True)
+
+        try:
+            # 3. Attempt auto-merge
+            p4.resolve_auto_merge()
+        except P4ConflictException as e:
+            # Save the *minimal* conflict state and re-raise
+            _save_conflict_state(current_parent, cl_to_rebase)
+            raise e # Re-raise to be caught by main handler
+
+        # 4. Shelve the result, which becomes the new parent
+        console.print(f"  Shelving rebased [bold]{cl_to_rebase}[/bold]...")
+        p4.force_shelve(cl_to_rebase)
+        
+        # 5. The rebased CL is now the parent for the next loop
+        current_parent = cl_to_rebase
         
     console.print("\n[bold green]Stack update complete.[/bold green]")
-    clear_state()
+    _clear_state()
