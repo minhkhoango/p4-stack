@@ -9,18 +9,18 @@
 Works as normal, but use `p4-stack create` instead of `p4 change`. It finds your files in the default changelist and stacks your new CL on the most recent one.
 
 ```bash
+# Make a change
 $ p4-stack create "feat: Add core refactor"
-# Creates CL 19
+$ p4 shelve -c 19
 
+# Unshelve CL 19, and make another change
 $ p4-stack create "feat: Build new feature"
 # Creates CL 20, automatically adding 'Depends-On: 19'
+$ p4 shelve -c 20
 
+# Unshelve CL 20, and make another change
 $ p4-stack create "docs: Add docs for new feature"
 # Creates CL 21, automatically adding 'Depends-On: 20'
-
-# Shelve your changes
-$ p4 shelve -c 19
-$ p4 shelve -c 20
 $ p4 shelve -c 21
 ```
 
@@ -32,9 +32,9 @@ Use `p4-stack list` to get a view of all your dependent changes.
 $ p4-stack list
 
 Current Stacks:
-  ► 19: feat: Add core refactor
-    ► 20: feat: Build new feature
-      ► 21: docs: Add docs for new feature
+└── ► 19: add the error
+    └── ► 20: introduce a function that use cl 19
+        └── ► 21: edit based on 20
 ```
 
 ### 3. Fix the Stack

@@ -24,8 +24,9 @@ def create_stack(
             if not files_in_default:
                 console.print(
                     "[yellow]Warning:[/yellow] No files in default changelist. "
-                    "New CL created, but no files moved."
+                    "Nothing to create or move; exiting."
                 )
+                raise typer.Exit(code=0)
             
             # 2. Find the current stack tip
             raw_changes = p4.get_pending_changelists()
