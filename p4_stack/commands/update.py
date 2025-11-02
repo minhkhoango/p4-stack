@@ -1,6 +1,6 @@
 # p4_stack/commands/update.py
 import typer
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from ..p4_actions import (
     P4Connection, P4Exception,
     P4ConflictException, P4LoginRequiredError
@@ -88,12 +88,16 @@ def update_stack(
 # --- We need a minimal state file just for --continue ---
 STATE_FILE = ".p4-stack-state.json"
 
-def _save_conflict_state(parent_cl: str, conflict_cl: str) -> None:
-    """Saves *only* the CLs involved in the conflict."""
-    state = {"parent_cl": parent_cl, "conflict_cl": conflict_cl}
+def _save_conflict_state(base_cl: str, conflict_cl: str, remaining_cls: List[str]) -> None:
+    """Saves complete state for resuming after conflict resolution."""
+    state: Dict[str, Any] = {
+        "base_cl": base_cl,
+        "conflict_cl": conflict_cl,
+        "remaining_cls": remaining_cls
+    }
     try:
         with open(STATE_FILE, 'w') as f:
-            json.dump(state, f)
+            json.dump(state, f, indent=2)
     except IOError as e:
         console.print(f"Error: Could not write state file {STATE_FILE}: {e}")
 
@@ -120,25 +124,30 @@ def _handle_continue_update(p4: P4Connection) -> None:
         raise typer.Exit(code=1)
         
     conflict_cl = state["conflict_cl"]
-    parent_cl = state["parent_cl"]
+    base_cl = state["base_cl"]
+    remaining_cls_raw = state.get("remaining_cls", [])
+    
+    # Ensure remaining_cls is a list of strings
+    remaining_cls: List[str] = []
+    if isinstance(remaining_cls_raw, list):
+        remaining_cls = [str(cl) for cl in remaining_cls_raw]
     
     console.print(
-        f"Continuing update for [bold]{conflict_cl}[/bold] onto [bold]{parent_cl}[/bold]..."
+        f"Continuing update for [bold]{conflict_cl}[/bold]..."
     )
     
     # User has resolved. We just need to shelve.
     console.print(f"  Shelving resolved changelist [bold]{conflict_cl}[/bold]...")
     p4.force_shelve(conflict_cl)
+    console.print(f"  [green]✓[/green] Successfully rebased [bold]{conflict_cl}[/bold]\n")
     
-    _clear_state()
-    console.print(
-        "\n[bold green]Continue operation complete.[/bold green]\n"
-        "Please re-run your original 'p4-stack update ...' command, \n"
-        f"starting from the *next* CL: [bold]{conflict_cl}[/bold]"
-    )
-    console.print(
-        f"Example: p4-stack update {conflict_cl} [child_of_conflict_cl] ..."
-    )
+    # If there are remaining CLs, continue with them
+    if remaining_cls:
+        console.print(f"Continuing with remaining CLs: {', '.join(remaining_cls)}")
+        _run_update_loop(p4, base_cl, [conflict_cl] + remaining_cls)
+    else:
+        _clear_state()
+        console.print("[bold green]Stack update complete.[/bold green]")
 
 
 def _run_update_loop(
@@ -150,36 +159,69 @@ def _run_update_loop(
     The main rebase engine loop.
     """
     
-    current_parent = base_cl
-    
-    for cl_to_rebase in children_cls:
-        p4.revert_all()
+    for i, cl_to_rebase in enumerate(children_cls):
+        # Determine the immediate parent for this child
+        if i == 0:
+            # First child: parent is the base CL
+            parent_cl = base_cl
+        else:
+            # Subsequent children: parent is the previous child (already rebased)
+            parent_cl = children_cls[i - 1]
         
         console.print(
-            f"Rebasing child [bold]{cl_to_rebase}[/bold] "
-            f"onto [bold]{current_parent}[/bold]..."
+            f"Rebasing [bold]{cl_to_rebase}[/bold] "
+            f"onto [bold]{parent_cl}[/bold]..."
         )
         
-        # 1. Unshelve the *newly fixed* parent (base)
-        p4.unshelve(current_parent, cl_to_rebase)
+        # Step 1: Clean workspace
+        p4.revert_all()
+        p4.sync_head()
         
-        # 2. Force-unshelve child's original changes on top
-        p4.unshelve(cl_to_rebase, cl_to_rebase, force=True)
-
+        # Step 2: Unshelve the child's own changes first to establish the base
+        console.print(f"  Unshelving child [bold]{cl_to_rebase}[/bold]...")
         try:
-            # 3. Attempt auto-merge
+            p4.unshelve(cl_to_rebase, cl_to_rebase, force=False)
+        except P4Exception as e:
+            err_msg = str(e).lower()
+            if "already opened" not in err_msg and "already open" not in err_msg:
+                console.print(f"  [yellow]Warning during child unshelve: {e}[/yellow]")
+
+        # Step 3: Unshelve the parent's changes on top, which will be treated as "theirs"
+        console.print(f"  Unshelving parent [bold]{parent_cl}[/bold]...")
+        try:
+            p4.unshelve(parent_cl, cl_to_rebase, force=False)
+        except P4Exception as e:
+            # Check if this is a benign "files already open" error
+            err_msg = str(e).lower()
+            if "already opened" not in err_msg and "already open" not in err_msg:
+                console.print(f"  [yellow]Warning during parent unshelve: {e}[/yellow]")
+
+        # Step 4: Resolve conflicts
+        console.print(f"  Resolving conflicts...")
+        try:
             p4.resolve_auto_merge()
         except P4ConflictException as e:
-            # Save the *minimal* conflict state and re-raise
-            _save_conflict_state(current_parent, cl_to_rebase)
-            raise e # Re-raise to be caught by main handler
+            # Auto-merge failed - try interactive resolution
+            console.print(
+                f"\n[yellow]Automatic merge failed:[/yellow] {e}\n"
+                f"Opening interactive resolve for [bold]{cl_to_rebase}[/bold]..."
+            )
+            try:
+                p4.resolve_interactive()
+                console.print("[green]Interactive resolution completed.[/green]")
+            except P4ConflictException:
+                # Still has conflicts - save state and exit
+                remaining_cls = children_cls[i+1:] if i+1 < len(children_cls) else []
+                _save_conflict_state(base_cl, cl_to_rebase, remaining_cls)
+                raise P4ConflictException(
+                    "Interactive resolution incomplete. "
+                    "Please manually resolve remaining conflicts."
+                )
 
-        # 4. Shelve the result, which becomes the new parent
+        # Step 5: Shelve the result
         console.print(f"  Shelving rebased [bold]{cl_to_rebase}[/bold]...")
         p4.force_shelve(cl_to_rebase)
+        console.print(f"  [green]✓[/green] Successfully rebased [bold]{cl_to_rebase}[/bold]\n")
         
-        # 5. The rebased CL is now the parent for the next loop
-        current_parent = cl_to_rebase
-        
-    console.print("\n[bold green]Stack update complete.[/bold green]")
+    console.print("[bold green]Stack update complete.[/bold green]")
     _clear_state()

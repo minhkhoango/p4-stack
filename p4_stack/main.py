@@ -1,7 +1,7 @@
 # p4_stack/main.py
 import typer
 from .commands.update import update_stack
-from .commands.submit import submit_stack
+# from .commands.submit import submit_stack
 from rich.console import Console
 
 
@@ -16,7 +16,7 @@ console = Console(stderr=True)
 
 # Register the commands
 app.command("update")(update_stack)
-app.command("submit")(submit_stack)
+# app.command("submit")(submit_stack)
 
 @app.callback()
 def main_callback() -> None:
