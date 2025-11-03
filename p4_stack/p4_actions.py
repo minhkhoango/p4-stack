@@ -4,7 +4,6 @@ from __future__ import annotations
 from P4 import P4, P4Exception as P4LibException  # type: ignore[import-not-found]
 from typing import List, Dict, Any, Optional, Union
 import os
-import re
 
 # --- Type Aliases for P4 Library ---
 P4Result = Union[Dict[str, Any], str]  # p4.run() returns list of these
@@ -129,30 +128,18 @@ class P4Connection:
             raise P4OperationError(f"Error force-shelving {cl_num}: {e}")
 
     def resolve_auto_merge(self) -> None:
-        """Attempts an automatic merge ('p4 resolve -am')."""
+        """Attempts an automatic resolve ('p4 resolve -am')."""
         try:
-            # First check if there are files to resolve
             resolve_list: P4CommandOutput = self.p4.run('resolve', '-n')  # type: ignore[attr-defined]
             if not resolve_list:
-                # No files need resolving
                 return
-                
-            # Try automatic merge
-            results: P4CommandOutput = self.p4.run('resolve', '-am')  # type: ignore[attr-defined]
-            has_conflict = False
-            for msg in results:  # type: ignore[misc]
-                if isinstance(msg, dict):
-                    action: str = msg.get("action", "")  # type: ignore[misc]
-                    # Check if resolve failed or needs manual intervention
-                    if "resolve" in action or action == "":
-                        has_conflict = True
-                        break
-                elif isinstance(msg, str) and "must resolve" in msg:
-                    has_conflict = True
-                    break
-            if has_conflict:
+            
+            self.p4.run('resolve', '-am')  # type: ignore[attr-defined]
+
+            post_check: P4CommandOutput = self.p4.run('resolve', '-n')  # type: ignore[attr-defined]
+            if post_check:
                 raise P4ConflictException(
-                    "Automatic merge failed. Manual conflict resolution required."
+                    "Automatic resolve incomplete. Manual resolution required."
                 )
         except P4LibException as e:
             if _is_login_error(str(e)):
@@ -160,7 +147,7 @@ class P4Connection:
             err_str = str(e)
             if "must resolve" in err_str or "resolve skipped" in err_str:
                 raise P4ConflictException(
-                    f"Automatic merge failed: {e}. Manual resolution required."
+                    f"Automatic resolve failed: {e}. Manual resolution required."
                 )
             # "No file(s) to resolve" is not an error
             if "no file(s) to resolve" in err_str.lower():
@@ -174,76 +161,18 @@ class P4Connection:
         """
         import subprocess
         try:
-            # Run p4 resolve interactively - it will use P4MERGE or default editor
-            result = subprocess.run(
+            subprocess.run(
                 ['p4', 'resolve'],
                 check=False,
                 capture_output=False  # Let it use the terminal directly
             )
             
-            if result.returncode != 0:
-                # Check if there are still unresolved files
-                still_unresolved: P4CommandOutput = self.p4.run('resolve', '-n')  # type: ignore[attr-defined]
-                if still_unresolved:
-                    raise P4ConflictException(
-                        "Interactive resolve exited with unresolved conflicts."
-                    )
+            still_unresolved: P4CommandOutput = self.p4.run('resolve', '-n')  # type: ignore[attr-defined]
+            if still_unresolved:
+                raise P4ConflictException(
+                    "Interactive resolution incomplete. Some files remain to be resolved."
+                )
         except FileNotFoundError:
             raise P4OperationError("Could not find 'p4' command in PATH.")
         except Exception as e:
             raise P4OperationError(f"Error during interactive resolve: {e}")
-
-    def get_changelist(self, cl_num: str) -> Dict[str, Any]:
-        """Fetches the full changelist object/spec."""
-        try:
-            return self.p4.fetch_change(cl_num) # type: ignore
-        except P4LibException as e:
-            if _is_login_error(str(e)):
-                raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
-            raise P4OperationError(f"Error fetching changelist {cl_num}: {e}")
-
-    def update_changelist(self, cl_spec: Dict[str, Any]) -> None:
-        """Saves an updated changelist spec (e.g., to change description)."""
-        try:
-            self.p4.save_change(cl_spec)  # type: ignore[attr-defined]
-        except P4LibException as e:
-            if _is_login_error(str(e)):
-                raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
-            raise P4OperationError(f"Error updating changelist: {e}")
-
-    def submit_changelist(self, cl_num: str) -> str:
-        """
-        Submits a changelist and returns the new, permanent CL number.
-        """
-        try:
-            result: P4CommandOutput = self.p4.run('submit', '-c', cl_num)  # type: ignore[attr-defined]
-            
-            submitted_cl: Optional[str] = None
-            for line in result:  # type: ignore[misc]
-                if isinstance(line, dict):
-                    submitted_cl_value: Any = line.get('submittedChange')  # type: ignore[misc]
-                    if submitted_cl_value:
-                        submitted_cl = str(submitted_cl_value)  # type: ignore[arg-type]
-                        break
-                elif isinstance(line, str):
-                    match = re.search(r"Change (\d+) submitted", line)
-                    if match:
-                        submitted_cl = match.group(1)
-                        break
-
-            if not submitted_cl:
-                raise P4OperationError(f"Could not parse submitted CL number from: {result}")
-            return submitted_cl
-        except P4LibException as e:
-            if _is_login_error(str(e)):
-                raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
-            raise P4OperationError(f"Error submitting {cl_num}: {e}")
-
-    def delete_changelist(self, cl_num: str) -> None:
-        """Deletes a pending changelist."""
-        try:
-            self.p4.run('change', '-d', cl_num)  # type: ignore[attr-defined]
-        except P4LibException as e:
-            if _is_login_error(str(e)):
-                raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
-            raise P4OperationError(f"Error deleting changelist {cl_num}: {e}")

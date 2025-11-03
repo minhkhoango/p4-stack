@@ -64,7 +64,7 @@ def submit_stack(
                 
                 # Delete the shelved files so we can submit
                 try:
-                    p4.p4.run('shelve', '-d', '-c', pending_cl_num)
+                    p4.p4.run('shelve', '-d', '-c', pending_cl_num) # type: ignore
                 except P4Exception:
                     pass  # Ignore if shelved files were already deleted
                 
@@ -91,7 +91,7 @@ def submit_stack(
                 console.print("Cleaning up pending changelists...")
                 for cl in stack:
                     try:
-                        p4.p4.run('shelve', '-d', '-c', cl)
+                        p4.p4.run('shelve', '-d', '-c', cl) # type: ignore
                     except P4Exception:
                         pass
                     try:

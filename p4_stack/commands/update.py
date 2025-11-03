@@ -52,19 +52,19 @@ def update_stack(
                 # We only rebase the *children*
                 base_cl = stack[0]
                 children_cls = stack[1:]
-                console.print(f"Starting update for stack based at [bold]{base_cl}[/bold]...")
+                console.print(f"Starting update for stack based at {base_cl}...")
                 _run_update_loop(p4, base_cl, children_cls)
-                
+
+    except P4LoginRequiredError as e:
+        console.print(f"\n[bold yellow]Login required:[/bold yellow] {e}")
+        raise typer.Exit(code=0)
+      
     except P4ConflictException as e:
         is_conflict_exit = True
         console.print(f"\n[bold yellow]CONFLICT:[/bold yellow] {e}")
         console.print("Please run [bold]'p4 resolve'[/bold] manually to fix.")
         console.print("Once resolved, run [bold]'p4-stack update --continue'[/bold].")
         # We don't exit with code 1, it's a planned stop.
-
-    except P4LoginRequiredError as e:
-        console.print(f"\n[bold yellow]Login required:[/bold yellow] {e}")
-        raise typer.Exit(code=0)
         
     except P4Exception as e:
         console.print(f"\n[bold red]Perforce Error:[/bold red] {e}")
@@ -78,12 +78,17 @@ def update_stack(
         raise typer.Exit(code=1)
     
     finally:
-        # *Always* revert on a successful or error exit.
-        # Skip only on a *conflict* exit, to let the user resolve.
         if not is_conflict_exit:
             console.print("Cleaning up workspace...")
-            with P4Connection() as p4_cleanup:
-                p4_cleanup.revert_all()
+            try:
+                with P4Connection() as p4_cleanup:
+                    p4_cleanup.revert_all()
+            except P4LoginRequiredError:
+                console.print("Skipping workspace cleanup: 'p4 login' required.")
+            except P4Exception as e:
+                console.print(f"Warning: workspace cleanup failed: {e}")
+            except Exception as e:
+                console.print(f"Unexpected error during cleanup: {e}")
 
 # --- We need a minimal state file just for --continue ---
 STATE_FILE = ".p4-stack-state.json"
@@ -178,7 +183,6 @@ def _run_update_loop(
         p4.sync_head()
         
         # Step 2: Unshelve the child's own changes first to establish the base
-        console.print(f"  Unshelving child [bold]{cl_to_rebase}[/bold]...")
         try:
             p4.unshelve(cl_to_rebase, cl_to_rebase, force=False)
         except P4Exception as e:
@@ -187,7 +191,6 @@ def _run_update_loop(
                 console.print(f"  [yellow]Warning during child unshelve: {e}[/yellow]")
 
         # Step 3: Unshelve the parent's changes on top, which will be treated as "theirs"
-        console.print(f"  Unshelving parent [bold]{parent_cl}[/bold]...")
         try:
             p4.unshelve(parent_cl, cl_to_rebase, force=False)
         except P4Exception as e:
@@ -197,7 +200,6 @@ def _run_update_loop(
                 console.print(f"  [yellow]Warning during parent unshelve: {e}[/yellow]")
 
         # Step 4: Resolve conflicts
-        console.print(f"  Resolving conflicts...")
         try:
             p4.resolve_auto_merge()
         except P4ConflictException as e:
@@ -219,9 +221,16 @@ def _run_update_loop(
                 )
 
         # Step 5: Shelve the result
-        console.print(f"  Shelving rebased [bold]{cl_to_rebase}[/bold]...")
-        p4.force_shelve(cl_to_rebase)
-        console.print(f"  [green]✓[/green] Successfully rebased [bold]{cl_to_rebase}[/bold]\n")
-        
-    console.print("[bold green]Stack update complete.[/bold green]")
+        try:
+            p4.force_shelve(cl_to_rebase)
+        except P4Exception as e:
+            # If shelving fails due to unresolved files, persist state and stop
+            if "must resolve" in str(e).lower():
+                remaining_cls = children_cls[i+1:] if i+1 < len(children_cls) else []
+                _save_conflict_state(base_cl, cl_to_rebase, remaining_cls)
+                raise P4ConflictException(
+                    "Shelving failed because files remain unresolved. Please run 'p4 resolve', then 'p4-stack update --continue'."
+                )
+            raise
+        console.print(f"[green]✓[/green] Successfully rebased [bold]{cl_to_rebase}[/bold]")
     _clear_state()
