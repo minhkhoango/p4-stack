@@ -1,3 +1,5 @@
+Update: I just discovered git-p4 (https://git-scm.com/docs/git-p4). Go use that instead. 
+
 # p4-stack: Stacked Diffs for Perforce
 
 **p4-stack** is a Python-based wrapper around the `p4` command to automates the manual process of updating, and submitting dependent changelists.
