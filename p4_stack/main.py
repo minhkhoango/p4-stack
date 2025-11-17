@@ -1,35 +1,73 @@
 # p4_stack/main.py
+import logging
 import typer
+from rich.console import Console
+
+from .logging_config import setup_logging
+from .commands.create import create_stack
 from .commands.list import list_stack
 from .commands.update import update_stack
-from .commands.create import create_stack
-from .commands.submit import submit_stack
-from .commands.review import review_stack
-from rich.console import Console
+# from .commands import upload_stack
+
+# Configure logging once at application startup
+setup_logging()
+
+log = logging.getLogger(__name__)
 
 # Set up the main Typer application
 app = typer.Typer(
     help="A CLI for stacked diffs in Perforce, bringing a Git-like workflow to P4.",
     add_completion=False,
-    rich_markup_mode="markdown",
 )
 
 console = Console(stderr=True)
 
 # Register the commands
-app.command("list")(list_stack)
-app.command("update")(update_stack)
-app.command("create")(create_stack)
-app.command("submit")(submit_stack)
-app.command("review")(review_stack)
+@app.command(
+    "create",
+    help="Create a new stacked CL dependent on a parent CL."
+)
+def create_cmd(
+    parent_cl: str = typer.Argument(
+        ...,
+        help="The parent changelist number to stack on top of.",
+        metavar="PARENT_CL",
+    )
+) -> None:
+    create_stack(parent_cl=parent_cl)
 
-@app.callback()
-def main_callback() -> None:
-    """
-    Main callback for the p4-stack CLI.
-    This runs before any command.
-    """
-    pass
+@app.command(
+    "list",
+    help="List all pending stacks for the current user."
+)
+def list_cmd() -> None:
+    list_stack()
+@app.command(
+    "update",
+    help="Rebase a stack: edit a base CL and re-apply all children."
+)
+
+def update_cmd(
+    base_cl: int = typer.Argument(
+        ...,
+        help="The changelist to edit and rebase children onto.",
+        metavar="BASE_CL",
+    )
+) -> None:
+    update_stack(base_cl=base_cl)
+
+# @app.command(
+#     "upload",
+#     help="Upload an entire stack to Swarm for review, creating/linking reviews."
+# )
+# def upload_cmd(
+#     cl_num: int = typer.Argument(
+#         ...,
+#         help="A CL number from the stack to upload. The whole stack will be processed.",
+#         metavar="CL_NUM",
+#     )
+# ) -> None:
+#     upload_stack(cl_num=cl_num)
 
 if __name__ == "__main__":
     app()

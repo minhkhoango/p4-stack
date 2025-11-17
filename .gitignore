@@ -121,5 +121,12 @@ logs/
 
 # Generated files
 ._*
+cookies.txt
+
+# Work-in-progress files
+swarm_api.py
+
+# Dev files
+logging_config.py
 
 # End of file

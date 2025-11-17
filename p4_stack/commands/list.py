@@ -1,41 +1,69 @@
-# p4_stack/commands/list.py
+"""
+Implements the `p4-stack list` command.
+"""
 import typer
-from ..p4_actions import P4Connection, P4Exception, P4LoginRequiredError
-from ..graph_utils import build_stack_graph, StackedChange
-from typing import List
+import logging
+from typing import cast
 from rich.console import Console
 from rich.tree import Tree
+from P4 import P4 # type: ignore
 
+from ..core.p4_actions import (
+    P4Connection,
+    P4Exception,
+    P4LoginRequiredError
+)
+from ..core.graph import build_stack_graph, AdjacencyList
+from ..core.types import RunDescribeS
+
+log = logging.getLogger(__name__)
 console = Console(stderr=True)
 
-def _print_stack_tree(roots: List[StackedChange]) -> None:
-    """Uses rich.Tree to pretty-print the stack forest."""
-    
-    if not roots:
-        console.print("[yellow]No stacked changes found.[/yellow]")
-        return
-        
-    tree = Tree(
-        "[bold]Current Stacks:[/bold]",
-        guide_style="cyan",
-    )
-    
-    stack_to_visit: List[tuple[StackedChange, Tree]] = [
-        (root, tree) for root in roots
-    ]
-    
-    while stack_to_visit:
-        node, parent_tree_node = stack_to_visit.pop(0)
-        
-        # Add the current node to the tree
-        node_label = f"► [bold]{node.cl_num}[/bold]: {node.short_desc}"
-        child_tree_node = parent_tree_node.add(node_label)
-        
-        # Add its children to the stack
-        for child in sorted(node.children, key=lambda c: int(c.cl_num)):
-            stack_to_visit.append((child, child_tree_node))
+
+def _get_changelist_status(p4: P4, node: int) -> str:
+    """
+    Determines the status of a changelist by running p4 describe.
+    Returns one of: "(submitted)", "(pending)", or "(not found)"
+    """
+    try:
+        result = cast(list[RunDescribeS], p4.run("describe", "-s", str(node))) # type: ignore
+        logging.debug(f"result: {result}")
+        if result and len(result) > 0:
+            change_info = result[0]
+            status = change_info.get('status', '').lower()
+            if status == 'pending':
+                return "(pending)"
+            elif status == 'submitted':
+                return "(submitted)"
             
-    console.print(tree)
+            # Fallback: check the string representation
+            result_str = str(result)
+            if "pending" in result_str.lower():
+                return "(pending)"
+            else:
+                return "(submitted)"
+    except Exception as e:
+        log.warning(f"Error getting status for changelist {node}: {e}")
+        pass
+    
+    return "(not found)"
+
+
+def _build_rich_tree(
+    node: int,
+    graph: AdjacencyList, 
+    parent_tree: Tree,
+    p4: P4
+) -> None:
+    """Recursively builds a rich.Tree for a given stack."""
+
+    status = _get_changelist_status(p4, node)
+    node_label = f"► [bold]{node}[/bold] {status}"
+    child_tree = parent_tree.add(node_label)
+
+    children = sorted(graph.get(node, []))
+    for child in children:
+        _build_rich_tree(child, graph, child_tree, p4)
 
 def list_stack() -> None:
     """
@@ -44,17 +72,55 @@ def list_stack() -> None:
     try:
         with P4Connection() as p4:
             console.print(f"Fetching pending changes for @{p4.user}...")
-            raw_changes = p4.get_pending_changelists()
-            roots = build_stack_graph(raw_changes)
-            _print_stack_tree(roots)
+
+            graph, child_to_parent = build_stack_graph(p4.p4)
+            log.debug(f"graph: {graph}")
+            log.debug(f"children_to_parent: {child_to_parent}")
+            if not graph and not child_to_parent:
+                console.print("No stacked changes found.")
+                return
+            
+            # Find all roots (nodes that are parents but not children)
+            all_parents = set(graph.keys())
+            all_children = set(child_to_parent.keys())
+            root_nodes = sorted(list(all_parents - all_children))
+            log.debug(f"all_parents: {all_parents}")
+            log.debug(f"all_childrens: {all_children}")
+            log.debug(f"root_nodes: {root_nodes}")
+
+            if not root_nodes:
+                potential_roots: set[int] = set()
+                for parent in all_parents:
+                    if parent not in all_children:
+                        potential_roots.add(parent)
+
+                if not potential_roots:
+                    console.print("No stack roots found.")
+                    log.warning(f"Graph has nodes but no roots. Graph: {graph}, ChildMap: {child_to_parent}")
+                    return
+                root_nodes = sorted(list(potential_roots))
+
+            rich_tree = Tree(
+                f"Current Stacks for {p4.user}:",
+            )
+
+            for root in root_nodes:
+                _build_rich_tree(root, graph, rich_tree, p4.p4)
+
+            console.print(rich_tree)
             
     except P4LoginRequiredError as e:
-        console.print(f"\n[bold yellow]Login required:[/bold yellow] {e}")
+        console.print(f"\nLogin required: {e}")
         raise typer.Exit(code=0) # Graceful exit, not an error
         
     except P4Exception as e:
-        console.print(f"\n[bold red]Perforce Error:[/bold red] {e}")
+        console.print(f"\nPerforce Error: {e}")
         raise typer.Exit(code=1)
     except Exception as e:
-        console.print(f"\n[bold red]An unexpected error occurred:[/bold red] {e}")
+        console.print(f"\nAn unexpected error occurred: {e}")
         raise typer.Exit(code=1)
+    
+# if __name__ == '__main__':
+#     from ..logging_config import setup_logging
+#     setup_logging()
+#     list_stack()

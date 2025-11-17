@@ -1,68 +1,79 @@
-# p4_stack/commands/create.py
+"""
+Implements the `p4-stack create` command.
+"""
 import typer
-from ..p4_actions import P4Connection, P4Exception, P4LoginRequiredError
-from ..graph_utils import build_stack_graph, find_stack_tip, set_depends_on
+import logging
+from typing import cast
+import re
 from rich.console import Console
 
+from ..core.p4_actions import (
+    P4Connection,
+    P4Exception,
+    P4LoginRequiredError,
+    P4OperationError
+)
+
+from ..core.types import (
+    RunChangeO
+)
+
+log = logging.getLogger(__name__)
 console = Console(stderr=True)
 
-def create_stack(
-    description: str = typer.Argument(
-        ...,
-        help="The description for the new changelist."
-    ),
-) -> None:
+
+def create_stack(parent_cl: int) -> None:
     """
-    Creates a new changelist stacked on the current tip.
-    
-    Moves all files from the default changelist into the new one.
+    Creates a new pending changelist (a "node") that is dependent
+    on the specified parent changelist.
     """
     try:
         with P4Connection() as p4:
             # 1. Check for files in the default changelist
-            files_in_default = p4.get_files_in_default_changelist()
-            if not files_in_default:
-                console.print(
-                    "[yellow]Warning:[/yellow] No files in default changelist. "
-                    "New CL created, but no files moved."
-                )
+            try:
+                p4.run("describe", "-s", parent_cl)
+            except P4OperationError as e:
+                console.print(f"Error: Parent CL '{parent_cl}' not found or is invalid.")
+                log.error(f"Failed to fetch parent CL {parent_cl}: {e}")
+                raise typer.Exit(code=1)
             
-            # 2. Find the current stack tip
-            raw_changes = p4.get_pending_changelists()
-            roots = build_stack_graph(raw_changes)
-            tip_cl = find_stack_tip(roots)
+            # 2. Create CL: Run p4 change -o to get a new changelist spec
+            try:
+                change_spec = cast(list[RunChangeO], p4.run("change", "-o"))
+            except P4OperationError as e:
+                console.print(f"Error: Fail to get new CL spec.")
+                log.error(f"Failed to get new CL spec: {e}")
+                raise typer.Exit(code=1)
             
-            # 3. Prepare the description with Depends-On
-            final_desc = description
-            if tip_cl:
-                final_desc = set_depends_on(description, tip_cl)
-                console.print(f"Stacking on current tip: [bold]{tip_cl}[/bold]")
-            else:
-                console.print("Creating new stack root.")
-                
-            # 4. Create the new changelist
-            new_cl = p4.create_new_changelist(final_desc)
-            
-            # 5. Move files from default to the new CL
-            if files_in_default:
-                depot_paths = [f['depotFile'] for f in files_in_default]
-                p4.reopen_files(new_cl, depot_paths)
-            
-            console.print(
-                f"\n[bold green]Success![/bold green] "
-                f"Created changelist [bold]{new_cl}[/bold]."
+            # 3. Set Parent: Set the Description field
+            change_spec[0]["Description"] = (
+                "[Edit description in P4V or 'p4 change']\n\n"
+                f"Depends-On: {parent_cl}\n"
             )
-            console.print(
-                f"Run [bold]'p4 shelve -c {new_cl}'[/bold] to save your changes."
-            )
+
+            # 4. Save: Run p4 save_change to handles p4.input for spec dictionaries
+            result_str = p4.save_change(change_spec[0])[0]
+
+            # 5. Output: Confirm the new CL
+            match = re.search(r"Change (\d+) created.", result_str)
+            if not match:
+                raise P4OperationError(f"Could not parse new CL number from: {result_str}")
+            
+            new_cl_num = match.group(1)
+            console.print(f"Created new changelist: {new_cl_num}")
+            console.print(f"Run 'p4 change {new_cl_num}' to add files and edit the description.")
 
     except P4LoginRequiredError as e:
-        console.print(f"\n[bold yellow]Login required:[/bold yellow] {e}")
-        raise typer.Exit(code=0) # Graceful exit
-
+        console.print(f"\nLogin required: {e}")
+        raise typer.Exit(code=0)
     except P4Exception as e:
-        console.print(f"\n[bold red]Perforce Error:[/bold red] {e}")
+        console.print(f"\nPerforce Error: {e}")
         raise typer.Exit(code=1)
     except Exception as e:
-        console.print(f"\n[bold red]An unexpected error occurred:[/bold red] {e}")
+        console.print(f"\nAn unexpected error occurred: {e}")
         raise typer.Exit(code=1)
+    
+# if __name__ == "__main__":
+#     from ..logging_config import setup_logging
+#     setup_logging()
+#     create_stack(214)
