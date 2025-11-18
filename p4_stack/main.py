@@ -28,7 +28,7 @@ console = Console(stderr=True)
     help="Create a new stacked CL dependent on a parent CL."
 )
 def create_cmd(
-    parent_cl: str = typer.Argument(
+    parent_cl: int = typer.Argument(
         ...,
         help="The parent changelist number to stack on top of.",
         metavar="PARENT_CL",

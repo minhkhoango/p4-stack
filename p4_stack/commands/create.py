@@ -72,8 +72,3 @@ def create_stack(parent_cl: int) -> None:
     except Exception as e:
         console.print(f"\nAn unexpected error occurred: {e}")
         raise typer.Exit(code=1)
-    
-# if __name__ == "__main__":
-#     from ..logging_config import setup_logging
-#     setup_logging()
-#     create_stack(214)

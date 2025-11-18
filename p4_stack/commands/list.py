@@ -3,7 +3,6 @@ Implements the `p4-stack list` command.
 """
 import typer
 import logging
-from typing import cast
 from rich.console import Console
 from rich.tree import Tree
 from P4 import P4 # type: ignore
@@ -13,40 +12,10 @@ from ..core.p4_actions import (
     P4Exception,
     P4LoginRequiredError
 )
-from ..core.graph import build_stack_graph, AdjacencyList
-from ..core.types import RunDescribeS
+from ..core.graph import AdjacencyList, build_stack_graph, get_changelist_status
 
 log = logging.getLogger(__name__)
 console = Console(stderr=True)
-
-
-def _get_changelist_status(p4: P4, node: int) -> str:
-    """
-    Determines the status of a changelist by running p4 describe.
-    Returns one of: "(submitted)", "(pending)", or "(not found)"
-    """
-    try:
-        result = cast(list[RunDescribeS], p4.run("describe", "-s", str(node))) # type: ignore
-        logging.debug(f"result: {result}")
-        if result and len(result) > 0:
-            change_info = result[0]
-            status = change_info.get('status', '').lower()
-            if status == 'pending':
-                return "(pending)"
-            elif status == 'submitted':
-                return "(submitted)"
-            
-            # Fallback: check the string representation
-            result_str = str(result)
-            if "pending" in result_str.lower():
-                return "(pending)"
-            else:
-                return "(submitted)"
-    except Exception as e:
-        log.warning(f"Error getting status for changelist {node}: {e}")
-        pass
-    
-    return "(not found)"
 
 
 def _build_rich_tree(
@@ -57,7 +26,7 @@ def _build_rich_tree(
 ) -> None:
     """Recursively builds a rich.Tree for a given stack."""
 
-    status = _get_changelist_status(p4, node)
+    status = get_changelist_status(p4, node)
     node_label = f"► [bold]{node}[/bold] {status}"
     child_tree = parent_tree.add(node_label)
 
@@ -119,8 +88,3 @@ def list_stack() -> None:
     except Exception as e:
         console.print(f"\nAn unexpected error occurred: {e}")
         raise typer.Exit(code=1)
-    
-# if __name__ == '__main__':
-#     from ..logging_config import setup_logging
-#     setup_logging()
-#     list_stack()

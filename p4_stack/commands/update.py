@@ -169,8 +169,3 @@ def update_stack(base_cl: int) -> None:
         console.print(f"\nAn unexpected error occurred: {e}")
         log.exception(f"Unexpected error in update_stack for CL {base_cl}")
         raise typer.Exit(code=1)
-    
-# if __name__ == '__main__':
-#     from ..logging_config import setup_logging
-#     setup_logging()
-#     update_stack(214)

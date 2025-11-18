@@ -12,6 +12,7 @@ from .types import (
     AdjacencyList,
     ReverseLookup,
     RunChangesS,
+    RunDescribeS
 )
 from .p4_actions import P4OperationError
 
@@ -96,3 +97,24 @@ def get_stack_for_cl(
     # The stack is now tip-to-root, so reverse it
     stack.reverse()
     return stack
+
+def get_changelist_status(p4: P4, node: int) -> str:
+    """
+    Determines the status of a changelist by running p4 describe.
+    Returns one of: "(submitted)", "(pending)", or "(not found)"
+    """
+    try:
+        result = cast(list[RunDescribeS], p4.run("describe", "-s", str(node))) # type: ignore
+        logging.debug(f"result: {result}")
+        if result and len(result) > 0:
+            change_info = result[0]
+            status = change_info.get('status', '').lower()
+            if status == 'pending':
+                return "(pending)"
+            elif status == 'submitted':
+                return "(submitted)"
+    except Exception as e:
+        log.warning(f"Error getting status for changelist {node}: {e}")
+        pass
+    
+    return "(not found)"
