@@ -1,6 +1,7 @@
 # p4-stack
 
 A CLI for stacked diffs in Perforce, bringing a Git-like stacked change workflow (e.g., Gerrit) to P4.
+Watch the 90s demo by me here: https://youtu.be/MKpt4zY4ptU
 
 ## Installation
 
@@ -51,7 +52,7 @@ Current Stacks for khoa:
 
 ### p4-stack update
 
-Rebases an entire stack, starting from a base CL. It performs an in-memory, 3-way merge for every child CL, applying their changes on top of the new parent. If conflict, p4-stack prompts you to resolve conflict in editor (nano as default).
+Rebases an entire stack, starting from a base CL. It performs an in-memory, 3-way merge for every child CL, applying their changes on top of the new parent. If conflict, p4-stack prompts you to resolve conflict in editor just like git.
 
 Update command uses diff3 -m -E under the hood. This appears better than p4's default merge, but weaker and slower than git's ort merge strategy.
 
