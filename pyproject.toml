@@ -15,6 +15,7 @@ p4-stack = "p4_stack.main:app"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.1"
+black = "^25.11.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

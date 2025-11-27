@@ -2,10 +2,11 @@
 Contains all logic for building and traversing the
 CL dependency graph.
 """
+
 import re
 import logging
 from collections import defaultdict
-from P4 import P4 # type: ignore
+from P4 import P4  # type: ignore
 from typing import cast
 
 from .types import (
@@ -34,19 +35,19 @@ def build_stack_graph(p4: P4) -> tuple[AdjacencyList, ReverseLookup, set[int]]:
     except Exception as e:
         log.error(f"Failed to run p4 changes: {e}")
         raise P4OperationError(f"Failed to fetch pending changelists: {e}")
-    
+
     # Build a set of all pending CL numbers for quick lookup
-    pending_cl_nums = {int(cl['change']) for cl in pending_cls}
-    
+    pending_cl_nums = {int(cl["change"]) for cl in pending_cls}
+
     graph: AdjacencyList = defaultdict(list)
     child_to_parent: ReverseLookup = {}
 
     for cl in pending_cls:
-        cl_num = int(cl['change'])
-        desc = cl['desc']
+        cl_num = int(cl["change"])
+        desc = cl["desc"]
 
         match = DEPENDS_ON_RE.search(desc)
-        
+
         if match:
             parent_num = int(match.group(1))
             # Only add the relationship if parent is also pending
@@ -56,9 +57,10 @@ def build_stack_graph(p4: P4) -> tuple[AdjacencyList, ReverseLookup, set[int]]:
 
     return graph, child_to_parent, pending_cl_nums
 
+
 def get_stack_from_base(
-    base_cl: int, 
-    graph: AdjacencyList, 
+    base_cl: int,
+    graph: AdjacencyList,
 ) -> list[int]:
     """
     Get the full stack to process in parent-first order (BFS)
@@ -77,12 +79,13 @@ def get_stack_from_base(
             if child not in visited:
                 visited.add(child)
                 queue.append(child)
-     
+
     if not stack_to_process:
         log.error(f"CL {base_cl} not found in pending stack graph.")
         return [base_cl]
 
     return stack_to_process
+
 
 def get_stack_for_cl(
     cl_num: int,
@@ -99,7 +102,7 @@ def get_stack_for_cl(
         parent_cl = child_to_parent[current_cl]
         stack.append(parent_cl)
         current_cl = parent_cl
-    
+
     # The stack is now tip-to-root, so reverse it
     stack.reverse()
     return stack

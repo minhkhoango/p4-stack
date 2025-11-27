@@ -22,11 +22,9 @@ app = typer.Typer(
 
 console = Console(stderr=True)
 
+
 # Register the commands
-@app.command(
-    "create",
-    help="Create a new stacked CL dependent on a parent CL."
-)
+@app.command("create", help="Create a new stacked CL dependent on a parent CL.")
 def create_cmd(
     parent_cl: int = typer.Argument(
         ...,
@@ -36,17 +34,13 @@ def create_cmd(
 ) -> None:
     create_stack(parent_cl=parent_cl)
 
-@app.command(
-    "list",
-    help="List all pending stacks for the current user."
-)
+
+@app.command("list", help="List all pending stacks for the current user.")
 def list_cmd() -> None:
     list_stack()
-@app.command(
-    "update",
-    help="Rebase a stack: edit a base CL and re-apply all children."
-)
 
+
+@app.command("update", help="Rebase a stack: edit a base CL and re-apply all children.")
 def update_cmd(
     base_cl: int = typer.Argument(
         ...,
@@ -56,9 +50,10 @@ def update_cmd(
 ) -> None:
     update_stack(base_cl=base_cl)
 
+
 @app.command(
     "upload",
-    help="Upload an entire stack to Swarm for review, creating/linking reviews."
+    help="Upload an entire stack to Swarm for review, creating/linking reviews.",
 )
 def upload_cmd(
     root_cl: int = typer.Argument(
@@ -68,6 +63,7 @@ def upload_cmd(
     )
 ) -> None:
     upload_stack(root_cl=root_cl)
+
 
 if __name__ == "__main__":
     app()

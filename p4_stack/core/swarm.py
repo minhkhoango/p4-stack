@@ -2,6 +2,7 @@
 Contains the SwarmClient class for interacting with the Helix Swarm API.
 Uses the existing P4 session ticket for authentication.
 """
+
 import logging
 import httpx
 import subprocess
@@ -11,7 +12,13 @@ from pathlib import Path
 from typing import Any, cast
 from P4 import P4  # type: ignore
 
-from .types import RunPropertyL
+from .types import (
+    RunPropertyL,
+    RunSwarmGet,
+    RunSwarmGetEntry,
+    RunSwarmPost,
+    RunSwarmPostEntry,
+)
 import re
 
 log = logging.getLogger(__name__)
@@ -21,19 +28,27 @@ log = logging.getLogger(__name__)
 
 class SwarmError(Exception):
     """Base exception for Swarm API errors."""
+
     pass
+
 
 class SwarmAuthError(SwarmError):
     """Raised when Swarm authentication fails."""
+
     pass
+
 
 class SwarmConfigError(SwarmError):
     """Raised when Swarm URL cannot be determined."""
+
     pass
+
 
 class SwarmAPIError(SwarmError):
     """Raised when a Swarm API call fails."""
+
     pass
+
 
 # --- SwarmClient Class ---
 
@@ -41,143 +56,132 @@ class SwarmAPIError(SwarmError):
 class SwarmClient:
     """
     A client for interacting with the Helix Swarm REST API.
-    
+
     Uses the existing P4 session ticket for authentication (no password prompts).
     Auto-detects Swarm URL from P4 server properties or environment variable.
     """
-    
+
     API_VERSION = "v11"
-    
+
     def __init__(self, p4: P4) -> None:
         """
         Initialize the Swarm client.
-        
-        Args:
-            p4: A connected P4 instance with a valid session.
-                Note: The user must have logged in with 'p4 login -a' to create
-                a host-unlocked ticket that Swarm can use.
-            
-        Raises:
-            SwarmAuthError: If the P4 ticket is invalid or expired.
-            SwarmConfigError: If the Swarm URL cannot be determined.
         """
         self.p4 = p4
         self._user = self._get_user()
         self._ticket = self._get_ticket()
         self._base_url = self._get_swarm_url()
-        
+
         # Create httpx client with basic auth
         self._client = httpx.Client(
             base_url=f"{self._base_url}/api/{self.API_VERSION}",
             auth=(self._user, self._ticket),
             timeout=30.0,
         )
-        
+
         # Output looks good, maybe swarm local config still doesn't allow working with ticket?
-        log.debug(f"SwarmClient initialized for user '{self._user}' at {self._base_url}")
-    
+        log.debug(
+            f"SwarmClient initialized for user '{self._user}' at {self._base_url}"
+        )
+
     def _get_user(self) -> str:
         """Get the P4 username."""
-        user = getattr(self.p4, 'user', None) or os.getenv("P4USER")
+        user = getattr(self.p4, "user", None) or os.getenv("P4USER")
         if not user:
             raise SwarmAuthError("Could not determine P4 user.")
         return cast(str, user)
-    
+
     def _get_ticket(self) -> str:
         """
-        Get a P4 session ticket for Swarm authentication.
-        
-        Strategy:
-            1. Check for cached host-unlocked ticket in ~/.p4stack_ticket
-            2. If not found/expired, prompt for password and generate new ticket
-            3. Cache the new ticket for future use
+        Get the cached host-unlocked ticket in ~/.p4stack_ticket
+        If not found/expired, generate new ticket and cache it
         """
         # Try to read cached ticket first
         cached_ticket = self._read_cached_ticket()
         if cached_ticket:
             log.debug(f"Using cached host-unlocked ticket: {cached_ticket[:5]}...")
             return cached_ticket
-        
+
         # No cached ticket - prompt for password
         try:
             password = getpass.getpass("Enter P4 password: ")
-            
+
             result = subprocess.run(
                 ["p4", "login", "-a", "-p"],
                 input=password,
                 capture_output=True,
                 text=True,
             )
-            
+
             if result.returncode != 0:
                 raise SwarmAuthError("Password invalid.")
-            
+
             # stdout format: 'Enter password: \nAEBC...\n'
-            ticket_match = re.search(r'[0-9A-Fa-f]{32}', result.stdout)
-            
+            ticket_match = re.search(r"[0-9A-Fa-f]{32}", result.stdout)
+
             if ticket_match:
                 ticket = ticket_match.group(0)
                 log.debug(f"Generated host-unlocked P4 ticket: {ticket[:5]}...")
                 # Cache the ticket for future use
                 self._cache_ticket(ticket)
                 return ticket
-            
+
             raise SwarmAuthError("Failed to parse P4 ticket from response.")
-            
+
         except subprocess.SubprocessError as e:
             raise SwarmAuthError(f"Failed to run p4 login: {e}")
         except KeyboardInterrupt:
             raise SwarmAuthError("Password entry cancelled.")
-    
+
     def _get_ticket_cache_path(self) -> Path:
         """Get the path to the ticket cache file."""
         return Path.home() / ".p4stack" / "ticket"
-    
+
     def _read_cached_ticket(self) -> str | None:
         """Read cached host-unlocked ticket if valid."""
         cache_path = self._get_ticket_cache_path()
-        
+
         if not cache_path.exists():
             return None
-        
+
         try:
             with open(cache_path, "r") as f:
                 lines = f.read().strip().split("\n")
-            
+
             if len(lines) < 3:
                 return None
-            
+
             cached_user, cached_server, ticket = lines[0], lines[1], lines[2]
-            p4port = getattr(self.p4, 'port', None) or os.getenv("P4PORT", "")
-            
+            p4port = getattr(self.p4, "port", None) or os.getenv("P4PORT", "")
+
             # Validate user/server match and ticket format
             if cached_user != self._user or cached_server != p4port:
                 return None
-            if len(ticket) != 32 or not re.match(r'^[0-9A-Fa-f]{32}$', ticket):
+            if len(ticket) != 32 or not re.match(r"^[0-9A-Fa-f]{32}$", ticket):
                 return None
-            
+
             # Verify P4 session is still valid
             result = subprocess.run(["p4", "login", "-s"], capture_output=True)
             if result.returncode != 0:
                 self._clear_cached_ticket()
                 return None
-            
+
             return ticket
         except Exception:
             return None
-    
+
     def _cache_ticket(self, ticket: str) -> None:
         """Cache the host-unlocked ticket."""
         cache_path = self._get_ticket_cache_path()
         try:
             cache_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            p4port = getattr(self.p4, 'port', None) or os.getenv("P4PORT", "")
+            p4port = getattr(self.p4, "port", None) or os.getenv("P4PORT", "")
             # Store as separate lines to avoid parsing issues with colons
             cache_path.write_text(f"{self._user}\n{p4port}\n{ticket}")
             cache_path.chmod(0o600)
         except Exception as e:
             log.warning(f"Failed to cache ticket: {e}")
-    
+
     def _clear_cached_ticket(self) -> None:
         """Remove the cached ticket file."""
         cache_path = self._get_ticket_cache_path()
@@ -187,19 +191,16 @@ class SwarmClient:
                 log.debug("Cleared cached ticket")
         except Exception as e:
             log.warning(f"Failed to clear cached ticket: {e}")
-    
+
     def _get_swarm_url(self) -> str:
         """
         Get the Swarm URL from P4 properties P4.Swarm.URL server property
-        
-        Raises:
-            SwarmConfigError: If URL cannot be determined.
         """
         # Try to get from P4 server property
         try:
             props = cast(
                 list[RunPropertyL],
-                self.p4.run_property("-l", "-n", "P4.Swarm.URL")  # type: ignore
+                self.p4.run_property("-l", "-n", "P4.Swarm.URL"),  # type: ignore
             )
             if props and len(props) > 0:
                 url = props[0].get("value", "")
@@ -207,83 +208,67 @@ class SwarmClient:
                     return url.rstrip("/")
         except Exception as e:
             log.warning(f"Failed to fetch P4.Swarm.URL property: {e}")
-        
+
         raise SwarmConfigError(
             "Could not determine Swarm URL. "
             "Set the SWARM_URL environment variable or configure P4.Swarm.URL on the server."
         )
-    
+
     def close(self) -> None:
         """Close the HTTP client."""
         self._client.close()
-    
+
     def __enter__(self) -> "SwarmClient":
         return self
-    
+
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self.close()
-    
+
     @property
     def swarm_url(self) -> str:
         """Returns the base Swarm URL (for building review links)."""
         return self._base_url
-    
+
     def get_review_id(self, cl_num: int) -> int | None:
         """
         Get the review ID associated with a changelist.
-        
-        Args:
-            cl_num: The changelist number.
-            
-        Returns:
-            The review ID if found, None otherwise.
-            
-        Raises:
-            SwarmAPIError: If the API call fails.
         """
         try:
+            # By default get 100 most recent review ids
             response = self._client.get(
                 "/reviews",
-                params={"change": cl_num}
+                params={
+                    "author": self._user,
+                },
             )
-            log.debug(f"response from get_review_id: {response}")
             response.raise_for_status()
-            
-            data = response.json()
-            reviews = data.get("reviews", [])
-            log.debug(f"reviews: {reviews}")
-            
-            if reviews and len(reviews) > 0:
-                review_id = reviews[0].get("id")
-                log.debug(f"Found review {review_id} for CL {cl_num}")
-                return int(review_id) if review_id else None
-            
+
+            data = cast(RunSwarmGet, response.json())
+            log.debug(f"get_review_id data for {cl_num}: {data}")
+
+            review_entries: list[RunSwarmGetEntry] = data.get("data").get("reviews", [])
+
+            # Look for the first cl_num in the 'changes' array of each review
+            # The array contains [local_cl, swarm_shelf_cl] (e.g. [214, 236])
+            for review in review_entries:
+                if cl_num == review.get("changes", [])[0]:
+                    review_id = review.get("id")
+                    log.debug(f"Found match: CL {cl_num} is in Review {review_id}")
+                    return int(review_id)
+
             log.debug(f"No review found for CL {cl_num}")
             return None
-            
+
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
-                raise SwarmAuthError(
-                    "Swarm authentication failed. "
-                    "Session expired. Please run 'p4 login' in your terminal."
-                )
+                raise SwarmAuthError("Swarm authentication failed. ")
             raise SwarmAPIError(f"Failed to get review for CL {cl_num}: {e}")
         except httpx.RequestError as e:
             raise SwarmAPIError(f"Network error fetching review for CL {cl_num}: {e}")
-    
+
     def create_review(self, cl_num: int, description: str) -> int:
         """
         Create a new Swarm review for a changelist.
-        
-        Args:
-            cl_num: The changelist number.
-            description: The review description.
-            
-        Returns:
-            The newly created review ID.
-            
-        Raises:
-            SwarmAPIError: If the API call fails.
         """
         try:
             response = self._client.post(
@@ -291,60 +276,55 @@ class SwarmClient:
                 data={
                     "change": cl_num,
                     "description": description,
-                }
+                },
             )
             response.raise_for_status()
-            
-            data = response.json()
-            log.debug(f"json data for {cl_num}: {data}")
-            
-            review = data.get("review", {})
-            review_id = review.get("id")
-            
+
+            data = cast(RunSwarmPost, response.json())
+
+            review_data = data.get("data")
+            log.debug(f"create_review review_data for {cl_num}: {data}")
+
+            review_entries: list[RunSwarmPostEntry] = review_data.get("review", [])
+
+            if not review_entries:
+                raise SwarmAPIError(f"No review entry in response: {data}")
+
+            review_id = review_entries[0].get("id")
+
             if not review_id:
                 raise SwarmAPIError(f"No review ID in response: {data}")
-            
+
             log.info(f"Created review {review_id} for CL {cl_num}")
             return int(review_id)
-            
+
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
-                raise SwarmAuthError(
-                    "Swarm authentication failed. "
-                    "Session expired. Please run 'p4 login' in your terminal."
-                )
+                raise SwarmAuthError("Swarm authentication failed. ")
             raise SwarmAPIError(f"Failed to create review for CL {cl_num}: {e}")
         except httpx.RequestError as e:
             raise SwarmAPIError(f"Network error creating review for CL {cl_num}: {e}")
-    
+
     def update_review_description(self, review_id: int, description: str) -> None:
         """
         Update the description of an existing Swarm review.
-        
-        Args:
-            review_id: The review ID to update.
-            description: The new description.
-            
-        Raises:
-            SwarmAPIError: If the API call fails.
+        Note: Uses v9 API as the PATCH endpoint is not available in v11.
         """
         try:
+            # Use v9 API - the PATCH /reviews/{id} endpoint is not available in v11
             response = self._client.patch(
-                f"/reviews/{review_id}",
+                f"{self._base_url}/api/v9/reviews/{review_id}",
                 data={
                     "description": description,
-                }
+                },
             )
             response.raise_for_status()
-            
-            log.info(f"Updated description for review {review_id}")
-            
+
+            log.info(f"response for update {response.json()}")
+
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
-                raise SwarmAuthError(
-                    "Swarm authentication failed. "
-                    "Session expired. Please run 'p4 login' in your terminal."
-                )
+                raise SwarmAuthError("Swarm authentication failed. ")
             raise SwarmAPIError(f"Failed to update review {review_id}: {e}")
         except httpx.RequestError as e:
             raise SwarmAPIError(f"Network error updating review {review_id}: {e}")
