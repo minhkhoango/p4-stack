@@ -7,7 +7,7 @@ from .logging_config import setup_logging
 from .commands.create import create_stack
 from .commands.list import list_stack
 from .commands.update import update_stack
-# from .commands import upload_stack
+from .commands.upload import upload_stack
 
 # Configure logging once at application startup
 setup_logging()
@@ -56,18 +56,18 @@ def update_cmd(
 ) -> None:
     update_stack(base_cl=base_cl)
 
-# @app.command(
-#     "upload",
-#     help="Upload an entire stack to Swarm for review, creating/linking reviews."
-# )
-# def upload_cmd(
-#     cl_num: int = typer.Argument(
-#         ...,
-#         help="A CL number from the stack to upload. The whole stack will be processed.",
-#         metavar="CL_NUM",
-#     )
-# ) -> None:
-#     upload_stack(cl_num=cl_num)
+@app.command(
+    "upload",
+    help="Upload an entire stack to Swarm for review, creating/linking reviews."
+)
+def upload_cmd(
+    root_cl: int = typer.Argument(
+        ...,
+        help="The ROOT changelist of the stack to upload. Must not have a parent.",
+        metavar="ROOT_CL",
+    )
+) -> None:
+    upload_stack(root_cl=root_cl)
 
 if __name__ == "__main__":
     app()

@@ -7,9 +7,8 @@ from typing import Any, cast
 import os
 import logging
 
-log = logging.getLogger(__name__)
 
-from .types import RunChangeO
+log = logging.getLogger(__name__)
 
 # --- Custom Domain-Specific Exceptions ---
 
@@ -79,41 +78,3 @@ class P4Connection:
         """Ensures P4 connection is disconnected."""
         if self.p4.connected():  # type: ignore
             self.p4.disconnect() # type: ignore
-    
-    def run(self, *args: Any) -> list[dict[str, Any]]:
-        """
-        Runs a P4 command and returns the tagged result, handling errors.
-        """
-        if not self.p4.connected(): # type: ignore
-            raise P4ConnectionError("P4 is not connected.")
-        
-        try:
-            result = cast(list[dict[str, Any]], self.p4.run(*args)) # type: ignore
-            return result  # The result itself is already the tagged output
-        except P4LibException as e:
-            err_str = str(e)
-            if _is_login_error(err_str):
-                raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
-            
-            # Log the full error from Perforce
-            for error in self.p4.errors: # type: ignore
-                log.error(f"P4 Error: {error}")
-            
-            raise P4OperationError(f"P4 command failed: {err_str}")
-        except Exception as e:
-            log.exception(f"Unexpected error during p4.run({args}): {e}")
-            raise P4Exception(f"Unexpected error: {e}")
-    
-    def save_change(self, spec: RunChangeO) -> list[str]:
-        """Convenience wrapper for 'p4.save_change'"""
-        if not self.p4.connected(): # type: ignore
-            raise P4ConnectionError("P4 is not connected.")
-        
-        try:
-            result = cast(list[str], self.p4.save_change(spec)) # type: ignore
-            return result
-        except P4LibException as e:
-            err_str = str(e)
-            if _is_login_error(err_str):
-                raise P4LoginRequiredError("Perforce session expired. Please run 'p4 login'.")
-            raise P4OperationError(f"Failed to save changelist: {e}")

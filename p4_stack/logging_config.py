@@ -8,7 +8,10 @@ from pathlib import Path
 _logging_configured = False
 
 
-def setup_logging(log_file: str | None = None, level: int = logging.DEBUG) -> None:
+def setup_logging(
+    log_file: str | None = None,
+    level: int = logging.DEBUG,
+) -> None:
     """
     Configure logging for the entire application.
     
@@ -24,7 +27,7 @@ def setup_logging(log_file: str | None = None, level: int = logging.DEBUG) -> No
     # Get the absolute path to the workspace root
     if log_file is None:
         workspace_root = Path(__file__).parent.parent
-        log_file = str(workspace_root / "example1.log")
+        log_file = str(workspace_root / "p4_stack.log")
     
     logging.basicConfig(
         level=level,
@@ -35,5 +38,8 @@ def setup_logging(log_file: str | None = None, level: int = logging.DEBUG) -> No
     
     # Set P4 library logging to WARNING to reduce noise
     logging.getLogger("P4").setLevel(logging.WARNING)
+    # Suppress detailed httpx/httpcore debug logs which include request reprs
+    logging.getLogger("httpx").setLevel(logging.INFO)
+    logging.getLogger("httpcore").setLevel(logging.INFO)
     
     _logging_configured = True

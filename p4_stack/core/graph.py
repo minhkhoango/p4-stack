@@ -12,7 +12,6 @@ from .types import (
     AdjacencyList,
     ReverseLookup,
     RunChangesS,
-    RunDescribeS
 )
 from .p4_actions import P4OperationError
 
@@ -21,10 +20,11 @@ log = logging.getLogger(__name__)
 DEPENDS_ON_RE = re.compile(r"Depends-On:\s*(\d+)")
 
 
-def build_stack_graph(p4: P4) -> tuple[AdjacencyList, ReverseLookup]:
+def build_stack_graph(p4: P4) -> tuple[AdjacencyList, ReverseLookup, set[int]]:
     """
     Builds the full dependency graph for the current user's pending CLs.
-    Returns (graph, child_to_parent).
+    Only includes pending changelists - submitted or not found CLs are excluded.
+    Returns (graph, child_to_parent, pending_cls).
     """
     # See all pending changes from user --me means -u $P4USER, -l fetch full desc
     try:
@@ -35,6 +35,9 @@ def build_stack_graph(p4: P4) -> tuple[AdjacencyList, ReverseLookup]:
         log.error(f"Failed to run p4 changes: {e}")
         raise P4OperationError(f"Failed to fetch pending changelists: {e}")
     
+    # Build a set of all pending CL numbers for quick lookup
+    pending_cl_nums = {int(cl['change']) for cl in pending_cls}
+    
     graph: AdjacencyList = defaultdict(list)
     child_to_parent: ReverseLookup = {}
 
@@ -43,12 +46,15 @@ def build_stack_graph(p4: P4) -> tuple[AdjacencyList, ReverseLookup]:
         desc = cl['desc']
 
         match = DEPENDS_ON_RE.search(desc)
+        
         if match:
             parent_num = int(match.group(1))
-            graph[parent_num].append(cl_num)
-            child_to_parent[cl_num] = parent_num
+            # Only add the relationship if parent is also pending
+            if parent_num in pending_cl_nums:
+                graph[parent_num].append(cl_num)
+                child_to_parent[cl_num] = parent_num
 
-    return graph, child_to_parent
+    return graph, child_to_parent, pending_cl_nums
 
 def get_stack_from_base(
     base_cl: int, 
@@ -97,24 +103,3 @@ def get_stack_for_cl(
     # The stack is now tip-to-root, so reverse it
     stack.reverse()
     return stack
-
-def get_changelist_status(p4: P4, node: int) -> str:
-    """
-    Determines the status of a changelist by running p4 describe.
-    Returns one of: "(submitted)", "(pending)", or "(not found)"
-    """
-    try:
-        result = cast(list[RunDescribeS], p4.run("describe", "-s", str(node))) # type: ignore
-        logging.debug(f"result: {result}")
-        if result and len(result) > 0:
-            change_info = result[0]
-            status = change_info.get('status', '').lower()
-            if status == 'pending':
-                return "(pending)"
-            elif status == 'submitted':
-                return "(submitted)"
-    except Exception as e:
-        log.warning(f"Error getting status for changelist {node}: {e}")
-        pass
-    
-    return "(not found)"

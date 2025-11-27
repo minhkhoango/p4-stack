@@ -12,7 +12,7 @@ from ..core.p4_actions import (
     P4Exception,
     P4LoginRequiredError
 )
-from ..core.graph import AdjacencyList, build_stack_graph, get_changelist_status
+from ..core.graph import AdjacencyList, build_stack_graph
 
 log = logging.getLogger(__name__)
 console = Console(stderr=True)
@@ -26,8 +26,7 @@ def _build_rich_tree(
 ) -> None:
     """Recursively builds a rich.Tree for a given stack."""
 
-    status = get_changelist_status(p4, node)
-    node_label = f"► [bold]{node}[/bold] {status}"
+    node_label = f"► [bold]{node}[/bold]"
     child_tree = parent_tree.add(node_label)
 
     children = sorted(graph.get(node, []))
@@ -39,42 +38,34 @@ def list_stack() -> None:
     Fetches and displays all stacked pending changelists for the user.
     """
     try:
-        with P4Connection() as p4:
-            console.print(f"Fetching pending changes for @{p4.user}...")
+        with P4Connection() as p4_conn:
+            p4 = p4_conn.p4
 
-            graph, child_to_parent = build_stack_graph(p4.p4)
+            graph, child_to_parent, all_pending_cls = build_stack_graph(p4)
             log.debug(f"graph: {graph}")
             log.debug(f"children_to_parent: {child_to_parent}")
-            if not graph and not child_to_parent:
+            log.debug(f"all_pending_cls: {all_pending_cls}")
+            if not all_pending_cls:
                 console.print("No stacked changes found.")
                 return
             
-            # Find all roots (nodes that are parents but not children)
-            all_parents = set(graph.keys())
+            # Find all roots (pending CLs that are not children of another pending CL)
             all_children = set(child_to_parent.keys())
-            root_nodes = sorted(list(all_parents - all_children))
-            log.debug(f"all_parents: {all_parents}")
+            root_nodes = sorted(list(all_pending_cls - all_children))
             log.debug(f"all_childrens: {all_children}")
             log.debug(f"root_nodes: {root_nodes}")
 
             if not root_nodes:
-                potential_roots: set[int] = set()
-                for parent in all_parents:
-                    if parent not in all_children:
-                        potential_roots.add(parent)
-
-                if not potential_roots:
-                    console.print("No stack roots found.")
-                    log.warning(f"Graph has nodes but no roots. Graph: {graph}, ChildMap: {child_to_parent}")
-                    return
-                root_nodes = sorted(list(potential_roots))
+                console.print("No stack roots found.")
+                log.warning(f"Graph has nodes but no roots. Graph: {graph}, ChildMap: {child_to_parent}")
+                return
 
             rich_tree = Tree(
-                f"Current Stacks for {p4.user}:",
+                f"Current Stacks for {str(p4.user)}:", # type: ignore
             )
 
             for root in root_nodes:
-                _build_rich_tree(root, graph, rich_tree, p4.p4)
+                _build_rich_tree(root, graph, rich_tree, p4)
 
             console.print(rich_tree)
             

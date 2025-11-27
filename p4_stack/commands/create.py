@@ -28,10 +28,11 @@ def create_stack(parent_cl: int) -> None:
     on the specified parent changelist.
     """
     try:
-        with P4Connection() as p4:
+        with P4Connection() as p4_conn:
+            p4 = p4_conn.p4
             # 1. Check for files in the default changelist
             try:
-                p4.run("describe", "-s", parent_cl)
+                p4.run_describe("-s", parent_cl) # type: ignore
             except P4OperationError as e:
                 console.print(f"Error: Parent CL '{parent_cl}' not found or is invalid.")
                 log.error(f"Failed to fetch parent CL {parent_cl}: {e}")
@@ -39,7 +40,7 @@ def create_stack(parent_cl: int) -> None:
             
             # 2. Create CL: Run p4 change -o to get a new changelist spec
             try:
-                change_spec = cast(list[RunChangeO], p4.run("change", "-o"))
+                change_spec = cast(list[RunChangeO], p4.run_change( "-o")) # type: ignore
             except P4OperationError as e:
                 console.print(f"Error: Fail to get new CL spec.")
                 log.error(f"Failed to get new CL spec: {e}")
@@ -52,7 +53,7 @@ def create_stack(parent_cl: int) -> None:
             )
 
             # 4. Save: Run p4 save_change to handles p4.input for spec dictionaries
-            result_str = p4.save_change(change_spec[0])[0]
+            result_str = cast(str, p4.save_change(change_spec[0])[0]) # type: ignore
 
             # 5. Output: Confirm the new CL
             match = re.search(r"Change (\d+) created.", result_str)

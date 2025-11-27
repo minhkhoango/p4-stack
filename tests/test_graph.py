@@ -65,10 +65,11 @@ class TestBuildStackGraph:
             }
         ]
         
-        graph, child_to_parent = build_stack_graph(mock_p4)
+        graph, child_to_parent, all_pending = build_stack_graph(mock_p4)
         
         assert graph == {}
         assert child_to_parent == {}
+        assert all_pending == {100}
     
     def test_build_stack_graph_linear_dependency_chain(self):
         """Should build a linear dependency chain correctly."""
@@ -79,12 +80,13 @@ class TestBuildStackGraph:
             {'change': '102', 'desc': 'Grandchild\n\nDepends-On: 101', 'user': 'testuser'},
         ]
         
-        graph, child_to_parent = build_stack_graph(mock_p4)
+        graph, child_to_parent, all_pending = build_stack_graph(mock_p4)
         
         assert graph[100] == [101]
         assert graph[101] == [102]
         assert child_to_parent[101] == 100
         assert child_to_parent[102] == 101
+        assert all_pending == {100, 101, 102}
     
     def test_build_stack_graph_multiple_children(self):
         """Should handle a CL with multiple child CLs."""
@@ -95,11 +97,12 @@ class TestBuildStackGraph:
             {'change': '102', 'desc': 'Child 2\n\nDepends-On: 100', 'user': 'testuser'},
         ]
         
-        graph, child_to_parent = build_stack_graph(mock_p4)
+        graph, child_to_parent, all_pending = build_stack_graph(mock_p4)
         
         assert set(graph[100]) == {101, 102}
         assert child_to_parent[101] == 100
         assert child_to_parent[102] == 100
+        assert all_pending == {100, 101, 102}
     
     def test_build_stack_graph_p4_error(self):
         """Should raise P4OperationError when p4 command fails."""
@@ -114,10 +117,11 @@ class TestBuildStackGraph:
         mock_p4 = Mock()
         mock_p4.run_changes.return_value = []
         
-        graph, child_to_parent = build_stack_graph(mock_p4)
+        graph, child_to_parent, all_pending = build_stack_graph(mock_p4)
         
         assert graph == {}
         assert child_to_parent == {}
+        assert all_pending == set()
 
 
 class TestGetStackFromBase:
@@ -290,7 +294,10 @@ class TestGraphIntegration:
         ]
         
         # Build graph
-        graph, child_to_parent = build_stack_graph(mock_p4)
+        graph, child_to_parent, all_pending = build_stack_graph(mock_p4)
+        
+        # Verify all pending CLs are tracked
+        assert all_pending == {100, 101, 102, 103}
         
         # Get stack for each CL
         assert get_stack_for_cl(100, child_to_parent) == [100]

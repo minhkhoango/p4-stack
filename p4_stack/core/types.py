@@ -69,11 +69,22 @@ class RunPrintMetaData(TypedDict):
 
 class RunWhere(TypedDict):
     """
-    An element of the list result when running p4 where PATH
+    An element of the list result when running p4.run_where PATH
     """
     depotFile: str   # //my_depot/file.txt
     clientFile: str  # //my_workspace/file.txt
     path: str        # /home/khoa/Breakthrough/Depot/file.txt
+
+
+class RunTickets(TypedDict):
+    """
+    An element of the list result when running p4.run_tickets
+    Used to get p4 ticket once logged in
+    """
+    Host: str        # localhost:1666
+    User: str        # khoa
+    Ticket: str      # long str ticket.
+
 
 Snapshot = dict[str, str]
 """A mapping of a file's name to its str content for a CL."""

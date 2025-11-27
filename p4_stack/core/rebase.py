@@ -28,7 +28,7 @@ def get_cl_snapshot(p4: P4, cl_num: int) -> tuple[Snapshot, FileToDepot]:
     snapshot: Snapshot = {}
     filename_to_depot: FileToDepot = {}
     try:
-        shelved_files: list[Any] = p4.run_print(f"//...@={cl_num}") # type: ignore
+        shelved_files = cast(list[Any], p4.run_print(f"//...@={cl_num}")) # type: ignore
         for i in range(0, len(shelved_files), 2):
             metadata = cast(RunPrintMetaData, shelved_files[i])
             content = cast(str, shelved_files[i+1])
