@@ -5,6 +5,7 @@ Uploads an entire stack to Swarm for review, creating and linking reviews.
 
 import logging
 from typing import cast
+import re
 
 import typer
 from rich.console import Console
@@ -27,40 +28,26 @@ from ..core.types import RunDescribeS
 log = logging.getLogger(__name__)
 console = Console(stderr=True)
 
-# --- Link Markers ---
-STACK_MARKER_START = "\n\n---\n🔗 **Stack Navigation:**\n"
-STACK_MARKER_END = "\n---"
-STACK_WARNING = "⚠️ **STACKED CHANGE:** This review depends on Review"
-
 
 def _strip_existing_stack_info(description: str) -> str:
     """
     Remove any existing stack navigation info from description.
-    This prevents duplicate markers when re-uploading.
     """
-    # Remove stack navigation section
-    if STACK_MARKER_START in description:
-        start_idx = description.find(STACK_MARKER_START)
-        end_idx = description.find(
-            STACK_MARKER_END, start_idx + len(STACK_MARKER_START)
-        )
-        if end_idx != -1:
-            description = (
-                description[:start_idx] + description[end_idx + len(STACK_MARKER_END) :]
-            )
-        else:
-            description = description[:start_idx]
+    # Remove Depends-On tags - handles both actual newlines and literal \n strings
+    new_desc = re.sub(r"(\\n)+Depends-On: \d+", "", description)
+    new_desc = re.sub(r"\n+Depends-On: \d+\s*$", "", new_desc, flags=re.MULTILINE)
 
-    # Remove stacked change warning lines
-    lines = description.split("\n")
-    filtered_lines = [line for line in lines if STACK_WARNING not in line]
+    lines = new_desc.split("\n")
+    # remove any Stack Navigation lines
+    filtered_lines = [line for line in lines if "**Stack Navigation: **" not in line]
 
-    return "\n".join(filtered_lines).strip()
+    new_desc = "\n".join(filtered_lines).strip()
+
+    return new_desc
 
 
 def _build_stack_description(
     original_desc: str,
-    swarm_url: str,
     cl_to_review: dict[int, int],
     stack: list[int],
     current_idx: int,
@@ -70,7 +57,6 @@ def _build_stack_description(
 
     Args:
         original_desc: The original CL description.
-        swarm_url: The base Swarm URL.
         cl_to_review: Mapping of CL numbers to review IDs.
         stack: The ordered stack list [Root, Child1, Child2, ...].
         current_idx: The index of the current CL in the stack.
@@ -78,40 +64,27 @@ def _build_stack_description(
     # Clean any existing stack info first
     clean_desc = _strip_existing_stack_info(original_desc)
 
-    # Build navigation section
+    suffix = {1: "st", 2: "nd", 3: "rd"}.get(current_idx + 1, "th")
     nav_parts: list[str] = []
 
-    # Add dependency warning for non-root CLs
-    if current_idx > 0:
-        parent_cl = stack[current_idx - 1]
-        parent_review = cl_to_review.get(parent_cl)
-        if parent_review:
-            clean_desc = f"{STACK_WARNING} [{parent_review}]({swarm_url}/reviews/{parent_review})\n\n{clean_desc}"
-
-    # Add Prev link (for non-root)
     if current_idx > 0:
         prev_cl = stack[current_idx - 1]
         prev_review = cl_to_review.get(prev_cl)
-        if prev_review:
-            nav_parts.append(
-                f"⬆️ Prev: [Review {prev_review}]({swarm_url}/reviews/{prev_review})"
-            )
+        nav_parts.append(f"Parent changelist: Review {prev_review}")
 
-    # Add Next link (for non-tip)
     if current_idx < len(stack) - 1:
         next_cl = stack[current_idx + 1]
         next_review = cl_to_review.get(next_cl)
-        if next_review:
-            nav_parts.append(
-                f"⬇️ Next: [Review {next_review}]({swarm_url}/reviews/{next_review})"
-            )
+        nav_parts.append(f"Child changelist: Review {next_review}")
 
-    # Only add navigation section if there are links
-    if nav_parts:
-        nav_section = STACK_MARKER_START + " | ".join(nav_parts) + STACK_MARKER_END
-        return clean_desc + nav_section
+    nav_line = " | ".join(nav_parts) if nav_parts else ""
 
-    return clean_desc
+    new_desc = (
+        f"{current_idx + 1}{suffix} changelist of the stack\n"
+        f"{nav_line}\n\n"
+        f"{clean_desc}"
+    )
+    return new_desc
 
 
 def _get_cl_description(p4: P4, cl_num: int) -> str:
@@ -203,7 +176,6 @@ def upload_stack(root_cl: int) -> None:
                     # Build the updated description with links
                     updated_desc = _build_stack_description(
                         original_desc=original_desc,
-                        swarm_url=swarm.swarm_url,
                         cl_to_review=cl_to_review,
                         stack=stack,
                         current_idx=idx,
@@ -212,21 +184,21 @@ def upload_stack(root_cl: int) -> None:
                     # Update the review description on Swarm
                     swarm.update_review_description(review_id, updated_desc)
 
-                #     position = (
-                #         "Root"
-                #         if idx == 0
-                #         else ("Tip" if idx == len(stack) - 1 else "Middle")
-                #     )
-                #     console.print(f"  Review {review_id} linked ({position})")
+                    position = (
+                        "Root"
+                        if idx == 0
+                        else ("Tip" if idx == len(stack) - 1 else "Middle")
+                    )
+                    console.print(f"  Review {review_id} linked ({position})")
 
-                # # --- Step 6: Summary ---
-                # console.print("\nStack uploaded successfully!")
-                # console.print("\nReview URLs:")
-                # for cl_num in stack:
-                #     review_id = cl_to_review[cl_num]
-                #     console.print(
-                #         f"  CL {cl_num}: {swarm.swarm_url}/reviews/{review_id}"
-                #     )
+                # --- Step 6: Summary ---
+                console.print("\nStack uploaded successfully!")
+                console.print("\nReview URLs:")
+                for cl_num in stack:
+                    review_id = cl_to_review[cl_num]
+                    console.print(
+                        f"  CL {cl_num}: {swarm.swarm_url}/reviews/{review_id}"
+                    )
 
     except P4LoginRequiredError as e:
         console.print(f"\nLogin required: {e}")

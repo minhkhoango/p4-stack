@@ -6,6 +6,7 @@ Tests the 3-way merge engine and snapshot management logic.
 
 import pytest
 import os
+from pathlib import Path
 from unittest.mock import Mock, patch, mock_open
 from p4_stack.core.rebase import (
     get_cl_snapshot,
@@ -369,8 +370,8 @@ class TestCommitSnapshotToCl:
         mock_p4 = Mock()
         mock_p4.run_where.return_value = [{"path": "/home/user/file.txt"}]
 
-        with patch("builtins.open", mock_open()):
-            with patch("os.path.exists", return_value=True):
+        with patch.object(Path, "write_text"):
+            with patch.object(Path, "exists", return_value=True):
                 original_snapshot: Snapshot = {"file.txt": "old"}
                 new_snapshot: Snapshot = {"file.txt": "new"}
                 file_map: FileToDepot = {"file.txt": "//depot/file.txt"}
@@ -389,8 +390,8 @@ class TestCommitSnapshotToCl:
         mock_p4 = Mock()
         mock_p4.run_where.return_value = [{"path": "/home/user/newfile.txt"}]
 
-        with patch("builtins.open", mock_open()):
-            with patch("os.path.exists", return_value=True):
+        with patch.object(Path, "write_text"):
+            with patch.object(Path, "exists", return_value=True):
                 original_snapshot: Snapshot = {}
                 new_snapshot: Snapshot = {"newfile.txt": "content"}
                 file_map: FileToDepot = {"newfile.txt": "//depot/newfile.txt"}
@@ -446,9 +447,9 @@ class TestCommitSnapshotToCl:
         mock_p4 = Mock()
         mock_p4.run_where.return_value = [{"path": "/home/user/new/dir/file.txt"}]
 
-        with patch("builtins.open", mock_open()):
-            with patch("os.path.exists", return_value=False):
-                with patch("os.makedirs") as mock_makedirs:
+        with patch.object(Path, "write_text"):
+            with patch.object(Path, "exists", return_value=False):
+                with patch.object(Path, "mkdir") as mock_mkdir:
                     original_snapshot: Snapshot = {}
                     new_snapshot: Snapshot = {"file.txt": "content"}
                     file_map: FileToDepot = {"file.txt": "//depot/file.txt"}
@@ -457,8 +458,8 @@ class TestCommitSnapshotToCl:
                         mock_p4, 100, new_snapshot, original_snapshot, file_map
                     )
 
-        # Verify makedirs was called
-        mock_makedirs.assert_called()
+        # Verify mkdir was called
+        mock_mkdir.assert_called()
 
     def test_commit_snapshot_empty_cl_deletes_shelve(self):
         """Should delete shelve if CL becomes empty."""

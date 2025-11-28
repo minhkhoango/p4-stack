@@ -6,6 +6,7 @@ import logging
 import tempfile
 import os
 import subprocess
+from pathlib import Path
 from P4 import P4  # type: ignore
 from typing import cast, Any
 
@@ -35,7 +36,7 @@ def get_cl_snapshot(p4: P4, cl_num: int) -> tuple[Snapshot, FileToDepot]:
             content = cast(str, shelved_files[i + 1])
 
             depot_file: str = metadata["depotFile"].strip("'\"")
-            filename: str = os.path.basename(depot_file)
+            filename: str = Path(depot_file).name
 
             snapshot[filename] = content
             filename_to_depot[filename] = depot_file
@@ -56,31 +57,29 @@ def edit_snapshot_with_editor(snapshot: Snapshot) -> Snapshot:
     Uses file basenames as temp filenames.
     """
     with tempfile.TemporaryDirectory() as temp_dir:
-        local_paths: list[str] = []
+        local_paths: list[Path] = []
         filename_to_depot: FileToDepot = {}
 
         for depot_path, content in snapshot.items():
-            local_path = os.path.join(temp_dir, depot_path)
+            local_path = Path(temp_dir) / depot_path
             local_paths.append(local_path)
-            filename_to_depot[local_path] = depot_path
+            filename_to_depot[str(local_path)] = depot_path
 
-            with open(local_path, "w", encoding="utf-8") as f:
-                f.write(content)
+            local_path.write_text(content, encoding="utf-8")
 
         # Launch editor
         editor = os.getenv("EDITOR", "nano")
         try:
-            subprocess.run([editor] + local_paths, check=True)
+            subprocess.run([editor] + [str(p) for p in local_paths], check=True)
         except Exception as e:
             log.error(f"Error running editor '{editor}'. Aborting. {e}")
             raise P4OperationError(f"Editor '{editor}' failed. Aborting update.")
 
-        # Read thew new snapshot
+        # Read the new snapshot
         new_snapshot: Snapshot = {}
         for local_path in local_paths:
-            depot_path = filename_to_depot[local_path]
-            with open(local_path, "r", encoding="utf-8") as f:
-                new_snapshot[depot_path] = str(f.read())
+            depot_path = filename_to_depot[str(local_path)]
+            new_snapshot[depot_path] = local_path.read_text(encoding="utf-8")
 
         return new_snapshot
 
@@ -121,9 +120,9 @@ def _three_way_merge_file(
         return merged_content, has_conflict
 
     finally:
-        os.remove(base_f.name)
-        os.remove(ours_f.name)
-        os.remove(theirs_f.name)
+        Path(base_f.name).unlink()
+        Path(ours_f.name).unlink()
+        Path(theirs_f.name).unlink()
 
 
 def three_way_merge_folder(
@@ -245,13 +244,12 @@ def commit_snapshot_to_cl(
 
                     local_path: str = client_path_map[0]["path"]
 
-                    local_dir = os.path.dirname(local_path)
-                    if not os.path.exists(local_dir):
-                        os.makedirs(local_dir)
+                    local_file = Path(local_path)
+                    if not local_file.parent.exists():
+                        local_file.parent.mkdir(parents=True, exist_ok=True)
 
                     # Write the new content from memory to the local file
-                    with open(local_path, "w", encoding="utf-8") as f:
-                        f.write(new_snapshot[filename])
+                    local_file.write_text(new_snapshot[filename], encoding="utf-8")
 
                 except Exception as e:
                     log.error(f"Failed to write/map file {filename}: {e}")

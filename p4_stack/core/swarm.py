@@ -8,6 +8,7 @@ import httpx
 import subprocess
 import getpass
 import os
+import time
 from pathlib import Path
 from typing import Any, cast
 from P4 import P4  # type: ignore
@@ -137,21 +138,30 @@ class SwarmClient:
         """Get the path to the ticket cache file."""
         return Path.home() / ".p4stack" / "ticket"
 
+    # Ticket validity period in seconds (11 hours - gives 1 hour buffer before 12-hour default expiration)
+    TICKET_VALIDITY_SECONDS = 11 * 60 * 60
+
     def _read_cached_ticket(self) -> str | None:
-        """Read cached host-unlocked ticket if valid."""
+        """Read cached host-unlocked ticket if valid and not expired."""
         cache_path = self._get_ticket_cache_path()
 
         if not cache_path.exists():
             return None
 
         try:
-            with open(cache_path, "r") as f:
-                lines = f.read().strip().split("\n")
+            lines = cache_path.read_text(encoding="utf-8").strip().split("\n")
 
-            if len(lines) < 3:
+            if len(lines) < 4:
+                # Old format without timestamp - clear and re-authenticate
+                self._clear_cached_ticket()
                 return None
 
-            cached_user, cached_server, ticket = lines[0], lines[1], lines[2]
+            cached_user, cached_server, ticket, timestamp_str = (
+                lines[0],
+                lines[1],
+                lines[2],
+                lines[3],
+            )
             p4port = getattr(self.p4, "port", None) or os.getenv("P4PORT", "")
 
             # Validate user/server match and ticket format
@@ -160,9 +170,21 @@ class SwarmClient:
             if len(ticket) != 32 or not re.match(r"^[0-9A-Fa-f]{32}$", ticket):
                 return None
 
-            # Verify P4 session is still valid
-            result = subprocess.run(["p4", "login", "-s"], capture_output=True)
-            if result.returncode != 0:
+            # Check if ticket has expired based on creation timestamp
+            try:
+                created_at = float(timestamp_str)
+                elapsed = time.time() - created_at
+                if elapsed >= self.TICKET_VALIDITY_SECONDS:
+                    log.debug(
+                        f"Cached ticket expired ({elapsed / 3600:.1f} hours old), clearing cache"
+                    )
+                    self._clear_cached_ticket()
+                    return None
+                log.debug(
+                    f"Cached ticket still valid ({(self.TICKET_VALIDITY_SECONDS - elapsed) / 3600:.1f} hours remaining)"
+                )
+            except ValueError:
+                # Invalid timestamp - clear and re-authenticate
                 self._clear_cached_ticket()
                 return None
 
@@ -171,14 +193,18 @@ class SwarmClient:
             return None
 
     def _cache_ticket(self, ticket: str) -> None:
-        """Cache the host-unlocked ticket."""
+        """Cache the host-unlocked ticket with creation timestamp."""
         cache_path = self._get_ticket_cache_path()
         try:
             cache_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             p4port = getattr(self.p4, "port", None) or os.getenv("P4PORT", "")
-            # Store as separate lines to avoid parsing issues with colons
-            cache_path.write_text(f"{self._user}\n{p4port}\n{ticket}")
+            timestamp = time.time()
+            # Store as separate lines: user, server, ticket, timestamp
+            cache_path.write_text(f"{self._user}\n{p4port}\n{ticket}\n{timestamp}")
             cache_path.chmod(0o600)
+            log.debug(
+                f"Cached ticket, valid for {self.TICKET_VALIDITY_SECONDS / 3600:.0f} hours"
+            )
         except Exception as e:
             log.warning(f"Failed to cache ticket: {e}")
 
