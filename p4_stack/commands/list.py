@@ -12,7 +12,7 @@ from ..core.p4_actions import P4Connection, P4Exception, P4LoginRequiredError
 from ..core.graph import AdjacencyList, build_stack_graph
 
 log = logging.getLogger(__name__)
-console = Console(stderr=True)
+console = Console(stderr=True, no_color=True)
 
 
 def _build_rich_tree(
@@ -20,7 +20,7 @@ def _build_rich_tree(
 ) -> None:
     """Recursively builds a rich.Tree for a given stack."""
 
-    node_label = f"► [bold]{node}[/bold]"
+    node_label = f"► {node}"
     child_tree = parent_tree.add(node_label)
 
     children = sorted(graph.get(node, []))

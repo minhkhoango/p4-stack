@@ -35,7 +35,7 @@ from ..core.rebase import (
 )
 
 log = logging.getLogger(__name__)
-console = Console(stderr=True)
+console = Console(stderr=True, no_color=True)
 
 
 def update_stack(base_cl: int) -> None:

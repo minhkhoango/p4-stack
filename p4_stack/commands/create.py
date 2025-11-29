@@ -18,7 +18,7 @@ from ..core.p4_actions import (
 from ..core.types import RunChangeO
 
 log = logging.getLogger(__name__)
-console = Console(stderr=True)
+console = Console(stderr=True, no_color=True)
 
 
 def create_stack(parent_cl: int) -> None:

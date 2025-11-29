@@ -26,7 +26,7 @@ from ..core.swarm import (
 from ..core.types import RunDescribeS
 
 log = logging.getLogger(__name__)
-console = Console(stderr=True)
+console = Console(stderr=True, no_color=True)
 
 
 def _strip_existing_stack_info(description: str) -> str:
@@ -70,12 +70,12 @@ def _build_stack_description(
     if current_idx > 0:
         prev_cl = stack[current_idx - 1]
         prev_review = cl_to_review.get(prev_cl)
-        nav_parts.append(f"Parent changelist: Review {prev_review}")
+        nav_parts.append(f"Parent CL: Review {prev_review}")
 
     if current_idx < len(stack) - 1:
         next_cl = stack[current_idx + 1]
         next_review = cl_to_review.get(next_cl)
-        nav_parts.append(f"Child changelist: Review {next_review}")
+        nav_parts.append(f"Child CL: Review {next_review}")
 
     nav_line = " | ".join(nav_parts) if nav_parts else ""
 
@@ -160,7 +160,6 @@ def upload_stack(root_cl: int) -> None:
                     else:
                         # Create new review
                         new_review = swarm.create_review(cl_num, description)
-                        console.print(f"Will create new review")
                         console.print(f"  CL {cl_num} → Review {new_review} (created)")
                         cl_to_review[cl_num] = new_review
 
@@ -184,21 +183,8 @@ def upload_stack(root_cl: int) -> None:
                     # Update the review description on Swarm
                     swarm.update_review_description(review_id, updated_desc)
 
-                    position = (
-                        "Root"
-                        if idx == 0
-                        else ("Tip" if idx == len(stack) - 1 else "Middle")
-                    )
-                    console.print(f"  Review {review_id} linked ({position})")
-
                 # --- Step 6: Summary ---
                 console.print("\nStack uploaded successfully!")
-                console.print("\nReview URLs:")
-                for cl_num in stack:
-                    review_id = cl_to_review[cl_num]
-                    console.print(
-                        f"  CL {cl_num}: {swarm.swarm_url}/reviews/{review_id}"
-                    )
 
     except P4LoginRequiredError as e:
         console.print(f"\nLogin required: {e}")

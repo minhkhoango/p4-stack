@@ -1,7 +1,6 @@
 # p4_stack/main.py
 import logging
 import typer
-from rich.console import Console
 
 from .logging_config import setup_logging
 from .commands.create import create_stack
@@ -19,8 +18,6 @@ app = typer.Typer(
     help="A CLI for stacked diffs in Perforce, bringing a Git-like workflow to P4.",
     add_completion=False,
 )
-
-console = Console(stderr=True)
 
 
 # Register the commands
