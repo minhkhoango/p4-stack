@@ -145,23 +145,48 @@ def upload_stack(root_cl: int) -> None:
                 console.print("\nPhase 1: Creating/finding reviews...")
                 cl_to_review: dict[int, int] = {}
 
-                for cl_num in stack:
+                for idx, cl_num in enumerate(stack):
                     # Get current description from P4
                     description = _get_cl_description(p4, cl_num)
-                    # Check if review already exists
+                    existing_review_id = swarm.get_review_id(cl_num)
 
-                    existing_review = swarm.get_review_id(cl_num)
+                    # Determine Parent CL (if exist)
+                    parent_cl = stack[idx - 1] if idx else None
 
-                    if existing_review:
+                    if existing_review_id:
                         console.print(
-                            f"  CL {cl_num} → Review {existing_review} (existing)"
+                            f"  CL {cl_num} → Review {existing_review_id} (existing)"
                         )
-                        cl_to_review[cl_num] = existing_review
+                        swarm.update_review(existing_review_id, cl_num)
+                        cl_to_review[cl_num] = existing_review_id
+
                     else:
                         # Create new review
-                        new_review = swarm.create_review(cl_num, description)
-                        console.print(f"  CL {cl_num} → Review {new_review} (created)")
-                        cl_to_review[cl_num] = new_review
+                        if parent_cl:
+                            # 1. Create review using PARENT content, but CHILD description
+                            console.print(
+                                f"  Seeding review base using Parent CL {parent_cl}..."
+                            )
+                            new_review_id = swarm.create_review(
+                                cl_num=parent_cl, description=description
+                            )
+
+                            # 2. Immediately switch it to the CHILD content
+                            console.print(f"  Stacking Child CL {cl_num} on top...")
+                            swarm.update_review(new_review_id, cl_num)
+
+                            console.print(
+                                f"  CL {cl_num} → Review {new_review_id} (created & stacked)"
+                            )
+                            cl_to_review[cl_num] = new_review_id
+
+                        else:
+                            # Standard creation
+                            new_review_id = swarm.create_review(cl_num, description)
+                            console.print(
+                                f"  CL {cl_num} → Review {new_review_id} (created root)"
+                            )
+                            cl_to_review[cl_num] = new_review_id
 
                 # --- Step 5: Phase 2 - Link reviews ---
                 console.print("\nPhase 2: Linking reviews...")

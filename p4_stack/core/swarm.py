@@ -354,3 +354,38 @@ class SwarmClient:
             raise SwarmAPIError(f"Failed to update review {review_id}: {e}")
         except httpx.RequestError as e:
             raise SwarmAPIError(f"Network error updating review {review_id}: {e}")
+
+    def update_review(self, review_id: int, change_num: int) -> None:
+        """
+        Update an existing review with a new changelist (creates a new version).
+        """
+        try:
+            # Swarm API v11: POST /reviews/{id}/replacewithchange
+            # Payload: { "changeId": <int> } as JSON
+            response = self._client.post(
+                f"/reviews/{review_id}/replacewithchange",
+                json={
+                    "changeId": change_num,
+                },
+            )
+            log.debug(
+                f"update_review response: {response.status_code} - {response.text}"
+            )
+            response.raise_for_status()
+            log.info(f"Updated Review {review_id} with CL {change_num}")
+
+        except httpx.HTTPStatusError as e:
+            log.error(f"update_review error response: {e.response.text}")
+            if e.response.status_code == 401:
+                raise SwarmAuthError("Swarm authentication failed.")
+            raise SwarmAPIError(f"Failed to update review {review_id}: {e}")
+
+    def build_review_url(
+        self,
+        review_id: int,
+    ) -> str:
+        """
+        Build a URL to view a review, optionally with version comparison.
+        """
+        base_url = f"{self._base_url}/reviews/{review_id}"
+        return f"{base_url}?v=1,2"
