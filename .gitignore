@@ -119,11 +119,4 @@ node_modules/
 *.log
 logs/
 
-# Generated files
-._*
-cookies.txt
-
-# Work-in-progress files
-swarm_api.py
-
 # End of file

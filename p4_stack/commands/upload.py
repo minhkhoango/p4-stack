@@ -15,6 +15,8 @@ from ..core.p4_actions import (
     P4Connection,
     P4Exception,
     P4LoginRequiredError,
+    ensure_review_safe_seed,
+    ensure_change_shelved,
 )
 from ..core.graph import build_stack_graph, get_stack_from_base
 from ..core.swarm import (
@@ -51,6 +53,7 @@ def _build_stack_description(
     cl_to_review: dict[int, int],
     stack: list[int],
     current_idx: int,
+    swarm: SwarmClient,
 ) -> str:
     """
     Build the updated description with stack navigation links.
@@ -60,6 +63,7 @@ def _build_stack_description(
         cl_to_review: Mapping of CL numbers to review IDs.
         stack: The ordered stack list [Root, Child1, Child2, ...].
         current_idx: The index of the current CL in the stack.
+        swarm: SwarmClient for building URLs.
     """
     # Clean any existing stack info first
     clean_desc = _strip_existing_stack_info(original_desc)
@@ -70,12 +74,23 @@ def _build_stack_description(
     if current_idx > 0:
         prev_cl = stack[current_idx - 1]
         prev_review = cl_to_review.get(prev_cl)
-        nav_parts.append(f"Parent CL: Review {prev_review}")
+        if prev_review and current_idx - 1 == 0:
+            nav_parts.append(f"Parent CL: Review {prev_review}")
+
+        elif prev_review:
+            parent_url = swarm.build_review_url(
+                prev_review, from_version=1, to_version=2
+            )
+            nav_parts.append(f"Parent CL: [Review {prev_review}]({parent_url})")
 
     if current_idx < len(stack) - 1:
         next_cl = stack[current_idx + 1]
         next_review = cl_to_review.get(next_cl)
-        nav_parts.append(f"Child CL: Review {next_review}")
+        if next_review:
+            child_url = swarm.build_review_url(
+                next_review, from_version=1, to_version=2
+            )
+            nav_parts.append(f"Child CL: [Review {next_review}]({child_url})")
 
     nav_line = " | ".join(nav_parts) if nav_parts else ""
 
@@ -144,6 +159,15 @@ def upload_stack(root_cl: int) -> None:
                 # --- Step 4: Phase 1 - Upsert reviews ---
                 console.print("\nPhase 1: Creating/finding reviews...")
                 cl_to_review: dict[int, int] = {}
+                seeded_cls: set[int] = (
+                    set()
+                )  # Track CLs created with seed (v1=parent, v2=child)
+
+                # First, ensure all CLs in the stack are shelved (needed for seed creation)
+                console.print("  Ensuring all CLs are shelved...")
+                for cl_num in stack:
+                    if not ensure_change_shelved(p4, cl_num):
+                        log.warning(f"Could not ensure CL {cl_num} is shelved")
 
                 for idx, cl_num in enumerate(stack):
                     # Get current description from P4
@@ -154,34 +178,65 @@ def upload_stack(root_cl: int) -> None:
                     parent_cl = stack[idx - 1] if idx else None
 
                     if existing_review_id:
+                        # Review already exists for this CL - just record the mapping
                         console.print(
                             f"  CL {cl_num} → Review {existing_review_id} (existing)"
                         )
-                        swarm.update_review(existing_review_id, cl_num)
                         cl_to_review[cl_num] = existing_review_id
 
                     else:
                         # Create new review
                         if parent_cl:
-                            # 1. Create review using PARENT content, but CHILD description
+                            # Try to create a seed shelf from parent for parent→child diff
                             console.print(
-                                f"  Seeding review base using Parent CL {parent_cl}..."
+                                f"  Creating seed shelf from parent CL {parent_cl}..."
                             )
-                            new_review_id = swarm.create_review(
-                                cl_num=parent_cl, description=description
-                            )
+                            seed_cl = ensure_review_safe_seed(p4, parent_cl, cl_num)
 
-                            # 2. Immediately switch it to the CHILD content
-                            console.print(f"  Stacking Child CL {cl_num} on top...")
-                            swarm.update_review(new_review_id, cl_num)
+                            if seed_cl:
+                                # Success: Create review from seed, then replace with child
+                                console.print(
+                                    f"  Created seed CL {seed_cl}, creating review..."
+                                )
+                                new_review_id = swarm.create_review(
+                                    cl_num=seed_cl, description=description
+                                )
 
-                            console.print(
-                                f"  CL {cl_num} → Review {new_review_id} (created & stacked)"
-                            )
-                            cl_to_review[cl_num] = new_review_id
+                                # Replace with child content (creates v2)
+                                console.print(
+                                    f"  Replacing with child CL {cl_num} (v2)..."
+                                )
+                                swarm.update_review(new_review_id, cl_num)
+
+                                console.print(
+                                    f"  CL {cl_num} → Review {new_review_id} (seeded from parent)"
+                                )
+                                cl_to_review[cl_num] = new_review_id
+                                seeded_cls.add(cl_num)
+                            else:
+                                # Fallback: Create review directly (depot base vs child)
+                                console.print(
+                                    f"  Seed failed, creating direct review for CL {cl_num}..."
+                                )
+                                new_review_id = swarm.create_review(cl_num, description)
+                                console.print(
+                                    f"  CL {cl_num} → Review {new_review_id} (direct, depot base)"
+                                )
+                                cl_to_review[cl_num] = new_review_id
+
+                            # After all said and done, we delete the seed_cl temp changelist
+                            try:
+                                p4.run_shelve("-d", "-c", seed_cl)  # type: ignore
+                            except:
+                                pass
+
+                            try:
+                                p4.run_delete("-c", seed_cl)  # type: ignore
+                            except:
+                                pass
 
                         else:
-                            # Standard creation
+                            # Root CL: Standard creation (depot base vs root)
                             new_review_id = swarm.create_review(cl_num, description)
                             console.print(
                                 f"  CL {cl_num} → Review {new_review_id} (created root)"
@@ -203,6 +258,7 @@ def upload_stack(root_cl: int) -> None:
                         cl_to_review=cl_to_review,
                         stack=stack,
                         current_idx=idx,
+                        swarm=swarm,
                     )
 
                     # Update the review description on Swarm

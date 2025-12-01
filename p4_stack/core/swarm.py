@@ -274,10 +274,10 @@ class SwarmClient:
 
             review_entries: list[RunSwarmGetEntry] = data.get("data").get("reviews", [])
 
-            # Look for the first cl_num in the 'changes' array of each review
-            # The array contains [local_cl, swarm_shelf_cl] (e.g. [214, 236])
+            # The array contains [swarm_shelf_cl, local_cl, swarm_shelf_cl, ...] (e.g. [214, 236])
+            log.debug(f"review_entries for {cl_num}: {review_entries}")
             for review in review_entries:
-                if cl_num == review.get("changes", [])[0]:
+                if cl_num in review.get("changes", []):
                     review_id = review.get("id")
                     log.debug(f"Found match: CL {cl_num} is in Review {review_id}")
                     return int(review_id)
@@ -334,13 +334,11 @@ class SwarmClient:
     def update_review_description(self, review_id: int, description: str) -> None:
         """
         Update the description of an existing Swarm review.
-        Note: Uses v9 API as the PATCH endpoint is not available in v11.
         """
         try:
-            # Use v9 API - the PATCH /reviews/{id} endpoint is not available in v11
-            response = self._client.patch(
-                f"{self._base_url}/api/v9/reviews/{review_id}",
-                data={
+            response = self._client.put(
+                f"/reviews/{review_id}/description",
+                json={
                     "description": description,
                 },
             )
@@ -383,9 +381,25 @@ class SwarmClient:
     def build_review_url(
         self,
         review_id: int,
+        from_version: int | None = None,
+        to_version: int | None = None,
     ) -> str:
         """
         Build a URL to view a review, optionally with version comparison.
+
+        Args:
+            review_id: The Swarm review ID
+            from_version: The "from" version for comparison (e.g., 1)
+            to_version: The "to" version for comparison (e.g., 2)
+
+        Returns:
+            A URL string to the review or version comparison
         """
         base_url = f"{self._base_url}/reviews/{review_id}"
-        return f"{base_url}?v=1,2"
+        if from_version is not None and to_version is not None:
+            return f"{base_url}/?v={from_version},{to_version}"
+
+        elif to_version is not None:
+            return f"{base_url}/?v=,{to_version}"
+
+        return base_url

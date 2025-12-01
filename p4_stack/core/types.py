@@ -2,7 +2,7 @@
 Central location for all shared type definitions, TypedDicts, and aliases.
 """
 
-from typing import Any, TypedDict
+from typing import Any, TypedDict, NotRequired
 
 
 # --- P4 API Result Types ---
@@ -44,6 +44,28 @@ class RunDescribeS(TypedDict, total=False):
     time: str
     desc: str
     status: str
+
+
+class RunDescribeSs(TypedDict):
+    """
+    Running p4 describe -S -s, use to check if CL is shelved
+    """
+
+    change: str  # '213'
+    user: str  # 'khoa'
+    client: str  # 'my_workspace'
+    time: str  # '1763075492'
+    desc: str  # 'Initial commit'
+    status: str  # 'submitted'
+    changeType: str  # 'public'
+    path: str  # '//my_depot/*'
+    oldChange: NotRequired[str]  # '209'
+    depotFile: NotRequired[list[str]]  # ['//my_depot/file.txt']
+    action: NotRequired[list[str]]  # ['add']
+    type: NotRequired[list[str]]  # ['text']
+    rev: NotRequired[list[str]]  # ['4', '2']
+    fileSize: NotRequired[list[str]]  # ['77']
+    digest: NotRequired[list[str]]  # ['A2C6...']
 
 
 class RunPropertyL(TypedDict):
