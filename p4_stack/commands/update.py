@@ -1,8 +1,6 @@
 """
 Implements the `p4-stack update` command.
-
-This file orchestrates the rebase process by calling
-functions from the `core` modules.
+Refactored to use P4Connection.
 """
 
 import logging
@@ -45,9 +43,8 @@ def update_stack(base_cl: int) -> None:
 
     try:
         with P4Connection() as p4_conn:
-            p4 = p4_conn.p4
             # Get the stack dependancy graph
-            graph, child_to_parent, _ = build_stack_graph(p4)
+            graph, child_to_parent, _ = build_stack_graph(p4_conn)
 
             # Get the full stack to process in parent-first order (BFS)
             stack_to_process = get_stack_from_base(base_cl, graph)
@@ -59,7 +56,7 @@ def update_stack(base_cl: int) -> None:
             filename_to_depot_map: dict[int, FileToDepot] = {}
             try:
                 for cl_num in stack_to_process:
-                    snapshot, filename_to_depot = get_cl_snapshot(p4, cl_num)
+                    snapshot, filename_to_depot = get_cl_snapshot(p4_conn, cl_num)
                     log.debug(filename_to_depot)
                     original_stack[cl_num] = snapshot
                     filename_to_depot_map[cl_num] = filename_to_depot
@@ -164,7 +161,7 @@ def update_stack(base_cl: int) -> None:
                     log.debug(f"original_stack[cl_num]: {original_stack[cl_num]}")
 
                     commit_snapshot_to_cl(
-                        p4,
+                        p4_conn,
                         cl_num,
                         new_stack[cl_num],
                         original_stack[cl_num],

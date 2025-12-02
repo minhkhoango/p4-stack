@@ -6,7 +6,6 @@ import typer
 import logging
 from rich.console import Console
 from rich.tree import Tree
-from P4 import P4  # type: ignore
 
 from ..core.p4_actions import P4Connection, P4Exception, P4LoginRequiredError
 from ..core.graph import AdjacencyList, build_stack_graph
@@ -15,9 +14,7 @@ log = logging.getLogger(__name__)
 console = Console(stderr=True, no_color=True)
 
 
-def _build_rich_tree(
-    node: int, graph: AdjacencyList, parent_tree: Tree, p4: P4
-) -> None:
+def _build_rich_tree(node: int, graph: AdjacencyList, parent_tree: Tree) -> None:
     """Recursively builds a rich.Tree for a given stack."""
 
     node_label = f"► {node}"
@@ -25,7 +22,7 @@ def _build_rich_tree(
 
     children = sorted(graph.get(node, []))
     for child in children:
-        _build_rich_tree(child, graph, child_tree, p4)
+        _build_rich_tree(child, graph, child_tree)
 
 
 def list_stack() -> None:
@@ -34,9 +31,7 @@ def list_stack() -> None:
     """
     try:
         with P4Connection() as p4_conn:
-            p4 = p4_conn.p4
-
-            graph, child_to_parent, all_pending_cls = build_stack_graph(p4)
+            graph, child_to_parent, all_pending_cls = build_stack_graph(p4_conn)
             log.debug(f"graph: {graph}")
             log.debug(f"children_to_parent: {child_to_parent}")
             log.debug(f"all_pending_cls: {all_pending_cls}")
@@ -58,11 +53,11 @@ def list_stack() -> None:
                 return
 
             rich_tree = Tree(
-                f"Current Stacks for {str(p4.user)}:",  # type: ignore
+                f"Current Stacks for {str(p4_conn.user)}:",  # type: ignore
             )
 
             for root in root_nodes:
-                _build_rich_tree(root, graph, rich_tree, p4)
+                _build_rich_tree(root, graph, rich_tree)
 
             console.print(rich_tree)
 

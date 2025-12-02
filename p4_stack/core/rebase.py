@@ -7,22 +7,20 @@ import tempfile
 import os
 import subprocess
 from pathlib import Path
-from P4 import P4  # type: ignore
-from typing import cast, Any
+from typing import cast
 
 from .types import (
     Snapshot,
     FileToDepot,
     MergeResult,
     RunPrintMetaData,
-    RunWhere,
 )
-from .p4_actions import P4OperationError
+from .p4_actions import P4Connection, P4OperationError
 
 log = logging.getLogger(__name__)
 
 
-def get_cl_snapshot(p4: P4, cl_num: int) -> tuple[Snapshot, FileToDepot]:
+def get_cl_snapshot(p4_conn: P4Connection, cl_num: int) -> tuple[Snapshot, FileToDepot]:
     """
     Fetches the content of every file in a shelved changelist.
     Returns: (snapshot, filename_to_depot_map)
@@ -30,7 +28,8 @@ def get_cl_snapshot(p4: P4, cl_num: int) -> tuple[Snapshot, FileToDepot]:
     snapshot: Snapshot = {}
     filename_to_depot: FileToDepot = {}
     try:
-        shelved_files = cast(list[Any], p4.run_print(f"//...@={cl_num}"))  # type: ignore
+        shelved_files = p4_conn.run_print(cl_num)
+
         for i in range(0, len(shelved_files), 2):
             metadata = cast(RunPrintMetaData, shelved_files[i])
             content = cast(str, shelved_files[i + 1])
@@ -87,10 +86,7 @@ def edit_snapshot_with_editor(snapshot: Snapshot) -> Snapshot:
 def _three_way_merge_file(
     base: str | None, ours: str | None, theirs: str | None
 ) -> MergeResult:
-    """
-    Performs a 3-way merge on string content.
-    Handles None inputs (adds/deletes) by writing empty temp files.)
-    """
+    """Performs a 3-way merge on string content."""
     # Use delete=False to manage paths, clean up in finally
     base_f = tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf-8")
     ours_f = tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf-8")
@@ -181,7 +177,7 @@ def three_way_merge_folder(
 
 
 def commit_snapshot_to_cl(
-    p4: P4,
+    p4_conn: P4Connection,
     cl_num: int,
     new_snapshot: Snapshot,
     original_snapshot: Snapshot,
@@ -193,10 +189,7 @@ def commit_snapshot_to_cl(
     """
     try:
         # Revert any pending changes in this CL
-        try:
-            p4.run_revert("-c", cl_num, "//...")  # type: ignore
-        except:
-            pass
+        p4_conn.revert(cl_num)
 
         original_files = set(original_snapshot.keys())
         new_files = set(new_snapshot.keys())
@@ -223,27 +216,21 @@ def commit_snapshot_to_cl(
                 if f not in filename_to_depot:
                     raise P4OperationError(
                         f"Cannot add new file '{f}' to CL {cl_num}. "
-                        "File was not in original snapshot or inherited from parent. "
-                        "Adding new files during 'update' is not yet supported."
+                        "File mapping missing."
                     )
                 depot_paths_to_write.append(filename_to_depot[f])
 
-            log.debug(
-                f"Attempt to run_edit, depot_paths_to_write: {depot_paths_to_write}"
-            )
-            p4.run_edit("-c", cl_num, *depot_paths_to_write)  # type: ignore
+            p4_conn.run_edit(cl_num, *depot_paths_to_write)
 
             for filename in files_to_write:
                 try:
                     depot_path = filename_to_depot[filename]
-                    client_path_map = cast(list[RunWhere], p4.run_where(depot_path))  # type: ignore
+                    client_path_map = p4_conn.run_where(depot_path)
 
-                    log.debug(f"client_path_map for {filename}: {client_path_map}")
                     if not client_path_map or "path" not in client_path_map[0]:
                         raise Exception(f"File not in client view: {depot_path}")
 
                     local_path: str = client_path_map[0]["path"]
-
                     local_file = Path(local_path)
                     if not local_file.parent.exists():
                         local_file.parent.mkdir(parents=True, exist_ok=True)
@@ -260,18 +247,18 @@ def commit_snapshot_to_cl(
         if files_to_delete_list:
             # Convert filenames to depot paths for Perforce commands
             depot_paths_to_delete = [filename_to_depot[f] for f in files_to_delete_list]
-            p4.run_delete("-c", cl_num, *depot_paths_to_delete)  # type: ignore
+            p4_conn.run_delete_files(cl_num, *depot_paths_to_delete)
 
         # --- Commit to Shelf ---
         if files_to_write or files_to_delete_list:
-            p4.run_shelve("-f", "-c", cl_num)  # type: ignore
+            p4_conn.shelve(cl_num, force=True)
         else:
             # If the CL is now empty, delete the shelve
             if not new_files and original_files:
-                p4.run_shelve("-d", "-c", cl_num)  # type: ignore
+                p4_conn.shelve(cl_num, delete=True)
 
     except Exception as e:
         log.error(f"Failed to commit snapshot to CL {cl_num}: {e}")
         raise P4OperationError(f"Failed to commit snapshot to CL {cl_num}: {e}")
     finally:
-        p4.run_revert("-c", cl_num, "//...")  # type: ignore
+        p4_conn.revert(cl_num)

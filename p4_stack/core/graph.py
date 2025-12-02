@@ -6,22 +6,21 @@ CL dependency graph.
 import re
 import logging
 from collections import defaultdict
-from P4 import P4  # type: ignore
-from typing import cast
 
 from .types import (
     AdjacencyList,
     ReverseLookup,
-    RunChangesS,
 )
-from .p4_actions import P4OperationError
+from .p4_actions import P4OperationError, P4Connection
 
 log = logging.getLogger(__name__)
 
 DEPENDS_ON_RE = re.compile(r"Depends-On:\s*(\d+)")
 
 
-def build_stack_graph(p4: P4) -> tuple[AdjacencyList, ReverseLookup, set[int]]:
+def build_stack_graph(
+    p4_conn: P4Connection,
+) -> tuple[AdjacencyList, ReverseLookup, set[int]]:
     """
     Builds the full dependency graph for the current user's pending CLs.
     Only includes pending changelists - submitted or not found CLs are excluded.
@@ -29,11 +28,8 @@ def build_stack_graph(p4: P4) -> tuple[AdjacencyList, ReverseLookup, set[int]]:
     """
     # See all pending changes from user --me means -u $P4USER, -l fetch full desc
     try:
-        pending_cls = cast(
-            list[RunChangesS], p4.run_changes("-s", "pending", "-l", "--me")  # type: ignore
-        )
+        pending_cls = p4_conn.get_pending_changes()
     except Exception as e:
-        log.error(f"Failed to run p4 changes: {e}")
         raise P4OperationError(f"Failed to fetch pending changelists: {e}")
 
     # Build a set of all pending CL numbers for quick lookup
